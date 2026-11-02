@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -20,8 +22,11 @@ func main() {
 		data       = flag.String("data", "", "data directory (required)")
 		fsync      = flag.String("fsync", "always", "always | never (never voids durability; for measurement only)")
 		standalone = flag.Bool("standalone", false, "run a single node without Raft")
-		timeout    = flag.Duration("request-timeout", 5*time.Second, "how long a write waits to be applied")
-		logLevel   = flag.String("log-level", "info", "debug | info | warn | error")
+		peers      = flag.String("peers", "", "every voter as id=url, comma-separated, identical on all nodes "+
+			"(e.g. 1=http://127.0.0.1:7001,2=http://127.0.0.1:7002,3=http://127.0.0.1:7003)")
+		tick     = flag.Duration("tick", 100*time.Millisecond, "raft tick; election timeout is 10-20 ticks")
+		timeout  = flag.Duration("request-timeout", 5*time.Second, "how long a write waits to be applied")
+		logLevel = flag.String("log-level", "info", "debug | info | warn | error")
 	)
 	flag.Parse()
 
@@ -37,9 +42,16 @@ func main() {
 		fatal(fmt.Errorf("--fsync must be always or never"))
 	}
 
+	peerMap, err := parsePeers(*peers)
+	if err != nil {
+		fatal(err)
+	}
+	if !*standalone && len(peerMap) == 0 {
+		fatal(fmt.Errorf("--peers is required unless --standalone is set"))
+	}
 	n, err := server.Start(server.Config{
-		ID: *id, Listen: *listen, DataDir: *data, Fsync: *fsync == "always",
-		Standalone: *standalone, RequestTimeout: *timeout, Logger: log,
+		ID: *id, Listen: *listen, DataDir: *data, Fsync: *fsync == "always", Standalone: *standalone,
+		Peers: peerMap, TickInterval: *tick, RequestTimeout: *timeout, Logger: log,
 	})
 	if err != nil {
 		log.Error("start failed", "err", err)
@@ -60,6 +72,25 @@ func main() {
 		log.Error("stop", "err", err)
 	}
 	os.Exit(code)
+}
+
+func parsePeers(s string) (map[uint64]string, error) {
+	out := map[uint64]string{}
+	if s == "" {
+		return out, nil
+	}
+	for _, part := range strings.Split(s, ",") {
+		id, url, ok := strings.Cut(strings.TrimSpace(part), "=")
+		n, err := strconv.ParseUint(id, 10, 64)
+		if !ok || err != nil || n == 0 || !strings.HasPrefix(url, "http") {
+			return nil, fmt.Errorf("bad --peers entry %q, want id=http://host:port", part)
+		}
+		if _, dup := out[n]; dup {
+			return nil, fmt.Errorf("--peers lists id %d twice", n)
+		}
+		out[n] = strings.TrimRight(url, "/")
+	}
+	return out, nil
 }
 
 func fatal(err error) {

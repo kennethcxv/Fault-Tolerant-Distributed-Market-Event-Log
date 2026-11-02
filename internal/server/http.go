@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/api"
 	"github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/event"
 	"github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/fsm"
@@ -29,7 +31,55 @@ func (n *Node) routes() *http.ServeMux {
 	mux.HandleFunc("GET /v1/consumers/{name}", n.guard(n.handleConsumer))
 	mux.HandleFunc("POST /v1/consumers/{name}/checkpoint", n.guard(n.handleCheckpoint))
 	mux.HandleFunc("GET /v1/status", n.handleStatus)
+	mux.Handle("GET /metrics", promhttp.HandlerFor(n.m.reg, promhttp.HandlerOpts{}))
+	mux.HandleFunc("GET /debug/fault", n.handleGetFault)
+	mux.HandleFunc("PUT /debug/fault", n.handleSetFault)
+	if n.raft != nil {
+		mux.HandleFunc("POST /raft/message", n.handleRaftMessage)
+	}
 	return mux
+}
+
+// handleRaftMessage accepts a batch of Raft messages from a peer.
+func (n *Node) handleRaftMessage(w http.ResponseWriter, r *http.Request) {
+	if got := r.Header.Get(clusterHeader); got != n.raft.tr.cluster {
+		n.log.Error("rejecting peer message from a node with a different --peers list",
+			"remote", r.RemoteAddr, "their_cluster", got, "our_cluster", n.raft.tr.cluster)
+		http.Error(w, "cluster id mismatch: nodes were started with different --peers", http.StatusConflict)
+		return
+	}
+	from, _ := strconv.ParseUint(r.Header.Get("X-Mlog-From"), 10, 64)
+	msgs, err := decodeMessages(http.MaxBytesReader(w, r.Body, 64<<20))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if n.flts.dropInbound(from) {
+		w.WriteHeader(http.StatusNoContent) // look delivered, as a lossy network would
+		return
+	}
+	select {
+	case n.raft.inbound <- msgs:
+		w.WriteHeader(http.StatusNoContent)
+	case <-n.raft.stopped:
+		http.Error(w, "node stopped", http.StatusServiceUnavailable)
+	case <-r.Context().Done():
+	}
+}
+
+func (n *Node) handleGetFault(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, n.flts.get())
+}
+
+// handleSetFault replaces this node's injected faults; an empty body clears them.
+func (n *Node) handleSetFault(w http.ResponseWriter, r *http.Request) {
+	var cfg FaultConfig
+	if r.ContentLength != 0 && !decodeBody(w, r, &cfg) {
+		return
+	}
+	n.flts.set(cfg)
+	n.log.Warn("fault injection updated", "faults", cfg)
+	writeJSON(w, http.StatusOK, cfg)
 }
 
 // guard rejects requests once the node has failed.

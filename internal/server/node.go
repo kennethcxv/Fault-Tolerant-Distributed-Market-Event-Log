@@ -17,6 +17,7 @@ import (
 
 	"github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/api"
 	"github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/fsm"
+	"github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/replica"
 	"github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/storage"
 )
 
@@ -31,9 +32,17 @@ type Config struct {
 	// Standalone runs without Raft: proposals are applied directly with one
 	// fsync per group. It is the single-node baseline for benchmarks.
 	Standalone bool
+	// Peers maps every voter's id to its base URL (raft mode). All nodes must
+	// be started with the same map.
+	Peers map[uint64]string
+	// TickInterval is one Raft tick; elections time out after 10-20 ticks
+	// and leaders heartbeat every tick.
+	TickInterval time.Duration
 	// RequestTimeout bounds how long a client waits for its command to apply.
 	RequestTimeout time.Duration
-	Logger         *slog.Logger
+	// Listener, if set, is used instead of listening on Listen (tests).
+	Listener net.Listener
+	Logger   *slog.Logger
 }
 
 // engine orders and applies commands. The standalone engine applies them
@@ -53,6 +62,9 @@ type Node struct {
 	store *storage.Store
 	fsm   *fsm.FSM
 	eng   engine
+	raft  *raftEngine // nil in standalone mode
+	m     *metrics
+	flts  *faults
 	ln    net.Listener
 	http  *http.Server
 
@@ -72,8 +84,11 @@ func Start(cfg Config) (*Node, error) {
 	if cfg.RequestTimeout == 0 {
 		cfg.RequestTimeout = 5 * time.Second
 	}
-	if !cfg.Standalone {
-		return nil, errors.New("server: raft mode is not implemented yet")
+	if cfg.TickInterval == 0 {
+		cfg.TickInterval = 100 * time.Millisecond
+	}
+	if !cfg.Standalone && cfg.Peers[cfg.ID] == "" {
+		return nil, fmt.Errorf("server: --peers must include this node's id %d", cfg.ID)
 	}
 	log := cfg.Logger.With("node", cfg.ID)
 	st, err := storage.Open(storage.Options{Dir: cfg.DataDir, FS: cfg.FS, Logger: log})
@@ -85,14 +100,32 @@ func Start(cfg Config) (*Node, error) {
 		st.Close()
 		return nil, fmt.Errorf("server: load state: %w", err)
 	}
-	ln, err := net.Listen("tcp", cfg.Listen)
-	if err != nil {
-		st.Close()
-		return nil, err
+	n := &Node{cfg: cfg, log: log, store: st, fsm: f, engDone: make(chan struct{}), failed: make(chan struct{}),
+		m: newMetrics(f, st), flts: newFaults()}
+	if cfg.Standalone {
+		n.eng = newStandalone(cfg.ID, f, cfg.Fsync, n.m)
+	} else {
+		peers := make([]uint64, 0, len(cfg.Peers))
+		for id := range cfg.Peers {
+			peers = append(peers, id)
+		}
+		rep, err := replica.Open(replica.Config{ID: cfg.ID, Peers: peers, ElectionTick: 10, HeartbeatTick: 1,
+			Sync: cfg.Fsync, Logger: log}, st, f)
+		if err != nil {
+			st.Close()
+			return nil, err
+		}
+		n.raft = newRaftEngine(cfg.ID, rep, cfg.Peers, cfg.TickInterval, cfg.Fsync, log, n.flts, n.m)
+		n.eng = n.raft
 	}
-	n := &Node{cfg: cfg, log: log, store: st, fsm: f, ln: ln, engDone: make(chan struct{}), failed: make(chan struct{})}
+	n.ln = cfg.Listener
+	if n.ln == nil {
+		if n.ln, err = net.Listen("tcp", cfg.Listen); err != nil {
+			st.Close()
+			return nil, err
+		}
+	}
 	n.ctx, n.cancel = context.WithCancel(context.Background())
-	n.eng = newStandalone(cfg.ID, f, cfg.Fsync)
 	n.http = &http.Server{Handler: n.routes(), ReadHeaderTimeout: 5 * time.Second}
 
 	go func() {
@@ -102,11 +135,11 @@ func Start(cfg Config) (*Node, error) {
 		}
 	}()
 	go func() {
-		if err := n.http.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := n.http.Serve(n.ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			n.fail(fmt.Errorf("http: %w", err))
 		}
 	}()
-	log.Info("node started", "listen", ln.Addr().String(), "applied", f.Applied(), "last_offset", f.LastOffset(),
+	log.Info("node started", "listen", n.ln.Addr().String(), "applied", f.Applied(), "last_offset", f.LastOffset(),
 		"fsync", cfg.Fsync, "standalone", cfg.Standalone)
 	return n, nil
 }
@@ -133,6 +166,7 @@ func (n *Node) fail(err error) {
 	n.failOnce.Do(func() {
 		n.failErr = err
 		n.log.Error("node failed; no longer serving", "err", err)
+		n.m.failed.Set(1)
 		close(n.failed)
 		n.cancel()
 	})
@@ -157,19 +191,21 @@ type standalone struct {
 	id        uint64
 	fsm       *fsm.FSM
 	sync      bool
+	m         *metrics
 	proposals chan proposal
 	stopped   chan struct{}
 }
 
 type proposal struct {
-	data []byte
-	done chan fsm.Result
+	data  []byte
+	done  chan fsm.Result
+	start time.Time
 }
 
 const maxGroupCommit = 1024
 
-func newStandalone(id uint64, f *fsm.FSM, sync bool) *standalone {
-	return &standalone{id: id, fsm: f, sync: sync, proposals: make(chan proposal, 4096), stopped: make(chan struct{})}
+func newStandalone(id uint64, f *fsm.FSM, sync bool, m *metrics) *standalone {
+	return &standalone{id: id, fsm: f, sync: sync, m: m, proposals: make(chan proposal, 4096), stopped: make(chan struct{})}
 }
 
 func (s *standalone) run(ctx context.Context) error {
@@ -198,18 +234,24 @@ func (s *standalone) run(ctx context.Context) error {
 			next++
 			ents[i] = &raftpb.Entry{Index: new(next), Data: group[i].data}
 		}
+		start := time.Now()
 		results, err := s.fsm.Apply(ents, nil, s.sync)
 		if err != nil {
 			return err
 		}
+		if s.sync {
+			s.m.walSync.Observe(time.Since(start).Seconds())
+		}
 		for i := range group {
+			s.m.observeResult(results[i])
+			s.m.commitLatency.Observe(time.Since(group[i].start).Seconds())
 			group[i].done <- results[i]
 		}
 	}
 }
 
 func (s *standalone) propose(ctx context.Context, cmd *fsm.Command) (fsm.Result, error) {
-	p := proposal{data: cmd.Marshal(), done: make(chan fsm.Result, 1)}
+	p := proposal{data: cmd.Marshal(), done: make(chan fsm.Result, 1), start: time.Now()}
 	select {
 	case s.proposals <- p:
 	case <-s.stopped:

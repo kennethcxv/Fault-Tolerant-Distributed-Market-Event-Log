@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -98,8 +99,9 @@ func (c *Client) write(ctx context.Context, path string, body, out any) error {
 			default:
 				return err // not retryable: invalid request, etc.
 			}
-		} else {
-			// A transport error may hit after the server received the request.
+		} else if opErr := (*net.OpError)(nil); !errors.As(err, &opErr) || opErr.Op != "dial" {
+			// Only a failed dial proves the request never reached a server;
+			// any other transport error may hit after the server received it.
 			mayHaveApplied = true
 		}
 		c.forgetLeader(target)
