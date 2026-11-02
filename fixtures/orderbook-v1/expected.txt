@@ -1,0 +1,9 @@
+# Order book schema v1 fixture. Regenerate: go test ./internal/replay -run Golden -update
+generator seed=20261102 instruments=4 events=5000
+sha256 6661dc5d0cd64e011a900e6e61a9094d28bc13a41663cae77898d69d2ca336a8
+stats {LastOffset:5000 Events:5000 Adds:2295 Cancels:1453 Executes:717 Replaces:432 Rejected:103 Malformed:0 Ignored:0 Gaps:0 GapEvents:0 ExecutedQty:184100}
+resting_orders 617
+top instrument=0 bid=9999 x 1200 ask=10001 x 2500
+top instrument=1 bid=10499 x 100 ask=10501 x 2100
+top instrument=2 bid=10999 x 1800 ask=11001 x 3900
+top instrument=3 bid=11499 x 3000 ask=11501 x 500
