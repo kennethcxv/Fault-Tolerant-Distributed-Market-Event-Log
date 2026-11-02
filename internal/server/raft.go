@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"fmt"
 	"log/slog"
 	"slices"
 	"time"
@@ -82,8 +83,17 @@ func newRaftEngine(id uint64, rep *replica.Replica, peers map[uint64]string, tic
 	return e
 }
 
-func (e *raftEngine) run(ctx context.Context) error {
+func (e *raftEngine) run(ctx context.Context) (err error) {
 	defer close(e.stopped)
+	// etcd-io/raft panics when it detects state it cannot continue from, most
+	// importantly a leader committing entries this node's log no longer has
+	// (its disk lost acknowledged writes). Stop the node with that reason
+	// instead of crashing the process mid-request.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("raft stopped this node: %v (if the log was lost or truncated, the node must be replaced)", r)
+		}
+	}()
 	defer e.failWaiters(&api.Error{Code: api.CodeOutcomeUnknown, Message: "node stopped while the command was pending"})
 	e.tr.start(ctx)
 	ticker := time.NewTicker(e.tick)

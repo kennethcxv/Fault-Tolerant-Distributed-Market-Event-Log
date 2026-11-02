@@ -12,3 +12,9 @@ func CorruptForTest(s *Store, offset uint64) error {
 	v[len(v)/2] ^= 1
 	return s.db.Set(eventKey(offset), v, pebble.Sync)
 }
+
+// TruncateRaftLogForTest deletes Raft entries from index onward, simulating
+// a disk that lost acknowledged writes.
+func TruncateRaftLogForTest(s *Store, from uint64) error {
+	return s.db.DeleteRange(raftEntryKey(from), raftEntryKey(1<<63), pebble.Sync)
+}

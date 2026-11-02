@@ -106,6 +106,17 @@ func Open(cfg Config, st *storage.Store, f *fsm.FSM) (*Replica, error) {
 	if err := ms.Append(rs.Entries); err != nil {
 		return nil, err
 	}
+	// A hard state that commits past the end of the log means the disk lost
+	// data it had acknowledged (truncated WAL, lying fsync). Raft would panic
+	// on it later; refuse to start with an explanation instead.
+	lastIndex := snapIndex
+	if n := len(rs.Entries); n > 0 {
+		lastIndex = rs.Entries[n-1].GetIndex()
+	}
+	if commit := rs.HardState.GetCommit(); commit > lastIndex {
+		return nil, fmt.Errorf("%w: raft hard state commits index %d but the log ends at %d; "+
+			"this node's disk lost acknowledged data and the node must be replaced", storage.ErrCorrupt, commit, lastIndex)
+	}
 	fresh := raft.IsEmptyHardState(rs.HardState) && len(rs.Entries) == 0 && snapIndex == 0
 	if fresh && f.Applied() > 0 {
 		return nil, errors.New("replica: state machine has data but the raft log is empty; was this directory used in standalone mode?")
