@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"log/slog"
+	"os"
 	"time"
 
 	"github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/replay"
@@ -48,6 +50,37 @@ func cmdReplay(ctx context.Context, e *env, args []string) error {
 			return err
 		}
 		fmt.Printf("checkpoint written to %s at offset %d\n", *save, eng.Next()-1)
+	}
+	return err
+}
+
+func cmdConsume(ctx context.Context, e *env, args []string) error {
+	fs := flag.NewFlagSet("consume", flag.ExitOnError)
+	name := fs.String("name", "", "consumer name (required)")
+	state := fs.String("state", "", "local state file (default NAME.ckpt)")
+	every := fs.Uint64("every", 1000, "events between checkpoints")
+	to := fs.Uint64("to", 0, "stop after this offset (default: follow until interrupted)")
+	fs.Parse(args)
+	if *name == "" {
+		return fmt.Errorf("usage: consume --name NAME [--state FILE] [--every N] [--to OFFSET]")
+	}
+	if *state == "" {
+		*state = *name + ".ckpt"
+	}
+	last, t0 := time.Now(), time.Now()
+	var lastOffset uint64
+	c := &replay.Consumer{Name: *name, Client: e.c, StateFile: *state, Every: *every, Batch: 5000,
+		Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})),
+		OnCheckpoint: func(off uint64, h [32]byte) {
+			now := time.Now()
+			rate := float64(off-lastOffset) / max(now.Sub(last).Seconds(), 1e-9)
+			fmt.Printf("checkpoint offset=%d sha256=%x rate=%.0f events/s\n", off, h[:8], rate)
+			last, lastOffset = now, off
+		}}
+	err := c.Run(ctx, *to)
+	if eng := c.Engine(); eng != nil {
+		h := eng.Book().Hash()
+		fmt.Printf("stopped at offset %d after %s\nsha256 %s\n", eng.Next()-1, time.Since(t0).Round(time.Millisecond), hex.EncodeToString(h[:]))
 	}
 	return err
 }

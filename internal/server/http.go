@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -33,6 +35,7 @@ func (n *Node) routes() *http.ServeMux {
 	mux.HandleFunc("POST /v1/append", n.guard(n.handleAppend))
 	mux.HandleFunc("GET /v1/events", n.guard(n.handleRead))
 	mux.HandleFunc("GET /v1/producers/{id}", n.guard(n.handleProducer))
+	mux.HandleFunc("GET /v1/consumers", n.guard(n.handleConsumers))
 	mux.HandleFunc("GET /v1/consumers/{name}", n.guard(n.handleConsumer))
 	mux.HandleFunc("POST /v1/consumers/{name}/checkpoint", n.guard(n.handleCheckpoint))
 	mux.HandleFunc("GET /v1/status", n.handleStatus)
@@ -243,6 +246,22 @@ func (n *Node) handleConsumer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, api.ConsumerResponse{Consumer: name, Offset: off, LastOffset: last, Backlog: last - min(off, last)})
+}
+
+// handleConsumers lists every consumer's checkpoint and backlog on this node.
+func (n *Node) handleConsumers(w http.ResponseWriter, r *http.Request) {
+	consumers, err := n.store.LoadConsumers()
+	if err != nil {
+		n.storageError(w, err)
+		return
+	}
+	last := n.fsm.LastOffset()
+	out := []api.ConsumerResponse{}
+	for name, off := range consumers {
+		out = append(out, api.ConsumerResponse{Consumer: name, Offset: off, LastOffset: last, Backlog: last - min(off, last)})
+	}
+	slices.SortFunc(out, func(a, b api.ConsumerResponse) int { return strings.Compare(a.Consumer, b.Consumer) })
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (n *Node) handleStatus(w http.ResponseWriter, r *http.Request) {

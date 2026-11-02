@@ -179,6 +179,13 @@ func (c *Client) Consumer(ctx context.Context, name string) (api.ConsumerRespons
 	return r, err
 }
 
+// Consumers lists every consumer's checkpoint and backlog.
+func (c *Client) Consumers(ctx context.Context) ([]api.ConsumerResponse, error) {
+	var out []api.ConsumerResponse
+	err := c.getJSON(ctx, "/v1/consumers", &out)
+	return out, err
+}
+
 // Verify asks one node to checksum records 1..to (0 means its last offset).
 func (c *Client) Verify(ctx context.Context, endpoint string, to uint64) (api.VerifyResponse, error) {
 	var v api.VerifyResponse

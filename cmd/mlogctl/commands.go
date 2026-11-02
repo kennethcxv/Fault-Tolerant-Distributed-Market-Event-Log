@@ -46,6 +46,15 @@ func cmdStatus(ctx context.Context, e *env, args []string) error {
 		}
 	}
 	w.Flush()
+	if consumers, err := e.c.Consumers(ctx); err == nil && len(consumers) > 0 {
+		fmt.Println("\nconsumers:")
+		w = tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(w, "NAME\tCHECKPOINT\tBACKLOG")
+		for _, c := range consumers {
+			fmt.Fprintf(w, "%s\t%d\t%d\n", c.Consumer, c.Offset, c.Backlog)
+		}
+		w.Flush()
+	}
 	if leader != nil && len(leader.Peers) > 0 {
 		fmt.Printf("\nreplication (from leader %d):\n", leader.ID)
 		w = tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
