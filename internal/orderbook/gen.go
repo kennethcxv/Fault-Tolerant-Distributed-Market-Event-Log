@@ -7,10 +7,10 @@ import "math/rand/v2"
 // valid, and emits about 2% that the book must reject (cancels of unknown
 // orders), so rejection handling is part of every replay.
 type Generator struct {
-	rng    *rand.Rand
+	rng *rand.Rand
 	// Mid price per instrument, in ticks. Bids rest strictly below it and asks
 	// strictly above, so the book never crosses, as on a real venue's feed.
-	insts []int64
+	insts  []int64
 	nextID uint64
 	live   []genOrder
 }

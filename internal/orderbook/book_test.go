@@ -54,9 +54,9 @@ func TestInvalidMessagesAreCountedNotFatal(t *testing.T) {
 		Msg{Type: TypeAddOrder, Instrument: 1, Order: 1, Side: Bid, Price: 100, Qty: 10},
 		Msg{Type: TypeAddOrder, Instrument: 1, Order: 1, Side: Bid, Price: 100, Qty: 10}, // duplicate id
 		Msg{Type: TypeCancelOrder, Instrument: 1, Order: 77},                             // unknown order
-		Msg{Type: TypeExecuteOrder, Instrument: 1, Order: 1, Qty: 11},                     // overfill
-		Msg{Type: TypeCancelOrder, Instrument: 2, Order: 1},                               // wrong instrument
-		Msg{Type: TypeAddOrder, Instrument: 1, Order: 2, Side: Ask, Price: 0, Qty: 1},     // bad price
+		Msg{Type: TypeExecuteOrder, Instrument: 1, Order: 1, Qty: 11},                    // overfill
+		Msg{Type: TypeCancelOrder, Instrument: 2, Order: 1},                              // wrong instrument
+		Msg{Type: TypeAddOrder, Instrument: 1, Order: 2, Side: Ask, Price: 0, Qty: 1},    // bad price
 	)
 	if b.Stats.Rejected != 5 || b.Orders() != 1 {
 		t.Fatalf("stats %+v", b.Stats)
