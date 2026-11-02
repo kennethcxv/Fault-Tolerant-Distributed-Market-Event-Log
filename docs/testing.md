@@ -26,7 +26,7 @@ HTML visualization of the history to `$MLOG_SIM_ARTIFACTS` (default
 
 | Scenario | Tests |
 |---|---|
-| Leader crash during a write | `sim.TestLeaderCrashDuringWriteTruncatesUncommittedEntries`, `e2e.TestMultiProcessFaults` (SIGKILL under load) |
+| Leader crash during a write | `sim.TestLeaderCrashDuringWriteTruncatesUncommittedEntries`, `sim.TestCrashAtSendPreservesCommittedWrites` (power cut while sending), `e2e.TestMultiProcessFaults` (SIGKILL under load) |
 | Network partition and recovery | `sim.TestIsolatedLeaderIsReplaced`, `sim.TestOneWayPartitionLeaderCannotHearFollowers`, `sim.TestRandomizedFaults`, `e2e.TestMultiProcessFaults` |
 | Delayed and duplicated client requests | `sim.TestDelayedAndDuplicatedClientRequests`; message-level duplication and delay in `sim.TestRandomizedFaults` |
 | Minority partition attempting writes | `sim.TestMinorityLeaderCannotAcknowledgeWrites`, `server.TestQuorumLossBlocksWritesUntilRecovery`, `scripts/demo-partition.sh` |
@@ -69,6 +69,9 @@ against the simulator, one at a time. None of this runs in CI.
 | Term and vote not persisted | caught: raft panics on restart ("term should be set when sending MsgPreVoteResp") |
 | ReadIndex reads answered before the read index is applied | **missed at first.** The workload read only from the leader, at uniformly random offsets. After reads went to followers and half of them targeted the newest offsets, Porcupine caught it (I6) |
 | fsync removed from snapshot + compaction | not caught, and correctly so. WAL ordering already makes it safe (decision D4), so the fsync was removed |
+| Every node sends before persisting (only the leader may) | **missed at first.** Crash points fell between steps, never between send and persist. With `CrashAtSendRate` (power cut at the moment of sending) it is caught: raft halts on `tocommit(34) is out of range [lastIndex(33)]` |
+| Reads not guarded during a multi-batch snapshot install | caught by `storage.TestReadsDuringInstallAreNeverCorrupt` ("offset 113 missing"). Found in code review, not by the original tests |
+| C++ spool writer's old handling of a partial write | caught by `spool_test.cpp` (`RLIMIT_FSIZE` forces a short write). Found in code review |
 
 ## Limitations
 

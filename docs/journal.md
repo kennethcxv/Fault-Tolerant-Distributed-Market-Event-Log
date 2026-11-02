@@ -397,3 +397,60 @@ these:
 5. **D4 open question:** does WAL rotation keep the prefix property? Checked
    in Pebble's source: `rotateWAL` closes, and so syncs, the old WAL before
    creating the new one. Recorded in D4.
+
+## 2026-11-02 — Milestone 10: performance analysis and final documentation
+
+Done:
+
+- Benchmarks:
+  - storage microbenchmarks (batch size × fsync);
+  - `bench/fsyncprobe`;
+  - the configuration × batch matrix (standalone, 1/3/5-node Raft, fsync on and
+    off);
+  - a concurrency sweep;
+  - failover time;
+  - catch-up via log and via snapshot;
+  - storage growth and write amplification;
+  - replay and consumer throughput;
+  - publisher throughput by batch size.
+
+  All of these run on macOS. A manual workflow runs the microbenchmarks, the
+  probe and the replicated matrix on GitHub's Linux runners.
+- `docs/benchmarks.md` with every parameter and the raw outputs in
+  `bench/results/`. Final README.
+- Fresh clone of the public repo: builds, `go test -short` passes, a 3-node
+  cluster starts and verifies.
+
+Findings, in the order they happened:
+
+- A synced commit costs ~4.2 ms on this Mac regardless of size: Pebble →
+  `File.Sync` → `F_FULLFSYNC`. On Linux runners it costs ~0.2–0.28 ms
+  (`fdatasync`).
+- A single-producer 3-node commit took ~9 ms. The fsync probe showed why: this
+  SSD serializes cache flushes across processes (total ~250/s for 1–5 writers),
+  so the leader's and followers' flushes can't overlap.
+- Standalone group commit averaged 3.9 commands per fsync with 8 closed-loop
+  clients (measured with a new `mlog_commit_group_size` histogram). Left as is
+  and documented; tuning a wait for a laptop's 4 ms flush would be tuning for
+  the wrong machine.
+- Two changes for replicated latency:
+  - the leader sends before persisting;
+  - all queued input is drained before each Ready.
+
+  On macOS they made no measurable difference, as the probe predicts. On
+  Linux, on the one pair of runs with the same CPU model, they gave +6% to +21%.
+  Runner hardware alone varied the same code's throughput by up to 2.2×, so
+  the comparison is indicative only.
+- The first attempt at a clean macOS microbenchmark ran while the cluster
+  matrix was still running, contending for CPU and fsyncs. Those results were
+  discarded and both were rerun alone.
+- Letting every node send before persisting passed every test. The
+  simulator's crashes happened between steps, never between "sent" and
+  "persisted". The new `CrashAtSendRate` fault cuts power at the moment of
+  sending. The unsafe mutation now fails, and the correct code survives 1,064
+  such cuts across 40 seeds.
+- Publisher: batches of 500 drained at 42k events/s; 2,000 or more reached
+  110k+. Default raised to 5,000.
+- A Porcupine check once timed out (60 s) under `-race` on a crash-at-send
+  history. Typical checks take under 1 s. The budget was raised to 3 minutes;
+  a timeout still fails the test.
