@@ -91,18 +91,25 @@ func (w *Workload) CheckLinearizable() error {
 	if w.external {
 		return nil
 	}
-	res, info := porcupine.CheckOperationsVerbose(LogModel, w.history, 60*time.Second)
+	return CheckHistory(w.history, fmt.Sprintf("seed-%d", w.c.opts.Seed))
+}
+
+// CheckHistory checks a client history against LogModel after BoundRetries.
+// On failure it writes Porcupine's visualization next to the traces.
+func CheckHistory(history []porcupine.Operation, name string) error {
+	BoundRetries(history)
+	res, info := porcupine.CheckOperationsVerbose(LogModel, history, 60*time.Second)
 	switch res {
 	case porcupine.Ok:
 		return nil
 	case porcupine.Unknown:
-		return fmt.Errorf("I6: linearizability check timed out on %d operations", len(w.history))
+		return fmt.Errorf("I6: linearizability check timed out on %d operations", len(history))
 	}
-	path := filepath.Join(artifactDir(), fmt.Sprintf("seed-%d-history.html", w.c.opts.Seed))
+	path := filepath.Join(artifactDir(), name+"-history.html")
 	if err := porcupine.VisualizePath(LogModel, info, path); err == nil {
-		return fmt.Errorf("I6: history of %d operations is not linearizable; visualization at %s", len(w.history), path)
+		return fmt.Errorf("I6: history of %d operations is not linearizable; visualization at %s", len(history), path)
 	}
-	return fmt.Errorf("I6: history of %d operations is not linearizable", len(w.history))
+	return fmt.Errorf("I6: history of %d operations is not linearizable", len(history))
 }
 
 // SaveTrace writes the run's trace for a failed test and returns its path.

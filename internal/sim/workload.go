@@ -209,28 +209,6 @@ func (w *Workload) finish(cl *simClient, out Output, returnAt int64) {
 	if op.input.Read && out.Unknown {
 		return // reads have no effect, so an unanswered read is not an operation
 	}
-	// A timed-out append is recorded as possibly taking effect at any later
-	// time, which makes the checker's search explode. Once a retry of the
-	// same sequence returns, every earlier attempt is settled: if the retry
-	// says duplicate, one of them took effect before it returned; if it says
-	// appended, none did, and dedup means none ever can. So their effect, if
-	// any, lies before this return time, and bounding them by it is sound.
-	if !op.input.Read && !out.Unknown {
-		for i := len(w.history) - 1; i >= 0; i-- {
-			h := &w.history[i]
-			if h.ClientId != cl.id {
-				continue
-			}
-			in := h.Input.(OpInput)
-			if in.Read {
-				continue // the client may read between retries
-			}
-			if in.Seq != op.input.Seq || !h.Output.(Output).Unknown {
-				break
-			}
-			h.Return = returnAt
-		}
-	}
 	w.history = append(w.history, porcupine.Operation{ClientId: cl.id, Input: op.input, Call: op.callAt, Output: out, Return: returnAt})
 }
 

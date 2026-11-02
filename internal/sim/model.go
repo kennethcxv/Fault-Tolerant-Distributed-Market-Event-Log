@@ -1,6 +1,7 @@
 package sim
 
 import (
+	"cmp"
 	"fmt"
 	"hash/fnv"
 	"slices"
@@ -121,4 +122,40 @@ var LogModel = porcupine.Model{
 		s := state.(logState)
 		return fmt.Sprintf("%d entries, last seqs %v", len(s.entries), s.lastSeq)
 	},
+}
+
+// BoundRetries tightens the return time of timed-out appends so Porcupine's
+// search stays tractable. A timed-out append may take effect at any later
+// time, so it is recorded with Return = MaxInt64. Clients retry with the same
+// sequence, and once a retry returns, every earlier attempt is settled: if the
+// retry says duplicate, one of them took effect before it returned; if it says
+// appended, none did, and dedup means none ever can. So setting their Return to
+// the retry's is sound. Each client's operations must not overlap.
+func BoundRetries(history []porcupine.Operation) {
+	byClient := map[int][]int{}
+	for i, op := range history {
+		byClient[op.ClientId] = append(byClient[op.ClientId], i)
+	}
+	for _, idx := range byClient {
+		slices.SortFunc(idx, func(a, b int) int { return cmp.Compare(history[a].Call, history[b].Call) })
+		for j, i := range idx {
+			in, out := history[i].Input.(OpInput), history[i].Output.(Output)
+			if in.Read || !out.Unknown {
+				continue
+			}
+			for _, k := range idx[j+1:] {
+				kin, kout := history[k].Input.(OpInput), history[k].Output.(Output)
+				if kin.Read {
+					continue
+				}
+				if kin.Seq != in.Seq {
+					break
+				}
+				if !kout.Unknown {
+					history[i].Return = history[k].Return
+					break
+				}
+			}
+		}
+	}
 }
