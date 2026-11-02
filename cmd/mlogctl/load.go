@@ -45,6 +45,7 @@ func cmdLoad(ctx context.Context, e *env, args []string) error {
 				return
 			}
 			gen := orderbook.NewGenerator(id, 4)
+			gen.StartIDsAt(id << 40)
 			for range prod.LastSeq {
 				gen.Next() // regenerate the part of the feed already committed
 			}

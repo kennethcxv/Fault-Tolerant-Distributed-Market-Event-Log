@@ -52,6 +52,12 @@ case "${1:-}" in
     mkdir -p "$DIR" && echo "$n" >"$DIR/size"
     (cd "$ROOT" && go build -o bin/ ./cmd/...)
     for i in $(seq 1 "$n"); do start_node "$i"; done
+    for _ in $(seq 1 100); do
+      if leader=$("$ROOT/bin/mlogctl" --endpoints "$(endpoints)" --timeout 1s leader 2>/dev/null); then
+        echo "leader is node $leader"; break
+      fi
+      sleep 0.1
+    done
     echo "export MLOG_ENDPOINTS=$(endpoints)"
     ;;
   status) "$ROOT/bin/mlogctl" --endpoints "$(endpoints)" status ;;
