@@ -88,6 +88,9 @@ func (c *Cluster) CheckAgreement() ([]event.Event, error) {
 
 // CheckLinearizable runs Porcupine over the workload history (I6).
 func (w *Workload) CheckLinearizable() error {
+	if w.external {
+		return nil
+	}
 	res, info := porcupine.CheckOperationsVerbose(LogModel, w.history, 60*time.Second)
 	switch res {
 	case porcupine.Ok:

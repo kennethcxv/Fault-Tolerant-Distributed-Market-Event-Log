@@ -29,7 +29,15 @@ type Workload struct {
 	acked   map[[2]uint64]uint64 // (producer, seq) -> offset
 	history []porcupine.Operation
 	errs    []string
+	// external is set when a test writes outside the workload; those writes
+	// are not in the history, so the history cannot be checked against the
+	// log model.
+	external bool
 }
+
+// ExternalWrites tells the workload that the test writes to the log
+// directly, which disables the linearizability check for this run.
+func (w *Workload) ExternalWrites() { w.external = true }
 
 type simClient struct {
 	id       int
