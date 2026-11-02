@@ -1,0 +1,26 @@
+name: bench
+# Manually triggered: storage and replay microbenchmarks on a GitHub-hosted
+# Linux runner, for an fdatasync data point next to the macOS numbers. Shared
+# VMs are noisy; treat the results as indicative.
+on: workflow_dispatch
+
+jobs:
+  microbench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: environment
+        run: |
+          { uname -srm; nproc; lscpu | grep -E 'Model name|^CPU\(s\)'; df -hT . ; go version; } | tee environment.txt
+      - name: benchmarks
+        run: |
+          go test -run '^$' -bench . -benchtime 2s ./internal/fsm ./internal/replay ./internal/event | tee bench-linux.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-linux
+          path: |
+            environment.txt
+            bench-linux.txt

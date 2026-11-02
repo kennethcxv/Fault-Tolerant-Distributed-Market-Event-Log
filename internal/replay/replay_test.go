@@ -95,7 +95,7 @@ func TestGoldenFixture(t *testing.T) {
 
 // logStore writes n generated events through the state machine, as the log
 // would, and returns a source over them.
-func logStore(t *testing.T, n int) (*storage.Store, StoreSource) {
+func logStore(t testing.TB, n int) (*storage.Store, StoreSource) {
 	t.Helper()
 	st, err := storage.Open(storage.Options{Dir: "n", FS: vfs.NewMem()})
 	if err != nil {

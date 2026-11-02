@@ -336,3 +336,32 @@ func (p pebbleLogger) Fatalf(format string, args ...any) {
 	p.l.Error(fmt.Sprintf(format, args...), "component", "pebble")
 	panic(fmt.Sprintf(format, args...))
 }
+
+// Stats summarizes Pebble's view of the store, for /debug/storage and the
+// storage benchmarks. WriteAmp is bytes physically written (WAL, flushes,
+// compactions) per logical byte written.
+type Stats struct {
+	DiskUsageBytes  uint64  `json:"disk_usage_bytes"`
+	WALLogicalBytes uint64  `json:"wal_logical_bytes"`
+	WALBytesWritten uint64  `json:"wal_bytes_written"`
+	FlushedBytes    uint64  `json:"flushed_bytes"`
+	CompactedBytes  uint64  `json:"compacted_bytes"`
+	WriteAmp        float64 `json:"write_amp"`
+	Tables          int64   `json:"tables"`
+	Compactions     int64   `json:"compactions"`
+}
+
+func (s *Store) Stats() Stats {
+	m := s.db.Metrics()
+	total := m.Total()
+	return Stats{
+		DiskUsageBytes:  m.DiskSpaceUsage(),
+		WALLogicalBytes: m.WAL.BytesIn,
+		WALBytesWritten: m.WAL.BytesWritten,
+		FlushedBytes:    total.TableBytesFlushed,
+		CompactedBytes:  total.TableBytesCompacted,
+		WriteAmp:        total.WriteAmp(),
+		Tables:          total.TablesCount,
+		Compactions:     m.Compact.Count,
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/pprof"
 	"slices"
 	"strconv"
 	"strings"
@@ -42,6 +43,12 @@ func (n *Node) routes() *http.ServeMux {
 	mux.HandleFunc("GET /v1/verify", n.guard(n.handleVerify))
 	mux.Handle("GET /metrics", promhttp.HandlerFor(n.m.reg, promhttp.HandlerOpts{}))
 	mux.HandleFunc("GET /debug/fault", n.handleGetFault)
+	mux.HandleFunc("GET /debug/storage", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, http.StatusOK, n.store.Stats()) })
+	// Profiling, for finding bottlenecks under load. Like the rest of the API
+	// it has no authentication; run on a trusted network.
+	mux.HandleFunc("GET /debug/pprof/", pprof.Index)
+	mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
 	mux.HandleFunc("PUT /debug/fault", n.handleSetFault)
 	if n.raft != nil {
 		mux.HandleFunc("POST /raft/message", n.handleRaftMessage)
