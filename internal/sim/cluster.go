@@ -43,6 +43,12 @@ type Options struct {
 	// SnapshotEntries and CompactKeep configure log compaction (0 = off).
 	SnapshotEntries uint64
 	CompactKeep     uint64
+	// CrashAtSendRate is the chance, per Ready that sends messages, that the
+	// node loses power at the moment it sends: the messages are on the
+	// network but anything the Ready persists after sending is not on disk.
+	// It tests the ordering contract between sending and persisting, which
+	// crashes between steps cannot reach.
+	CrashAtSendRate float64
 	Logger          *slog.Logger
 	OnResult        func(node uint64, r fsm.Result)
 	OnRead          func(node uint64, rctx []byte)
@@ -78,6 +84,8 @@ type Cluster struct {
 	trace   []string
 	// Installs counts snapshots installed per node.
 	Installs map[uint64]int
+	// SendCrashes counts CrashAtSendRate power cuts.
+	SendCrashes int
 }
 
 func New(opts Options) (*Cluster, error) {
@@ -185,9 +193,28 @@ func (c *Cluster) processReady() error {
 	for _, n := range c.Nodes {
 		for n.Up && n.rep.HasReady() {
 			var msgs []*raftpb.Message
-			out, err := n.rep.Ready(func(m []*raftpb.Message) { msgs = m })
+			var crashed *vfs.MemFS
+			out, err := n.rep.Ready(func(m []*raftpb.Message) {
+				msgs = m
+				if len(m) > 0 && c.rng.Float64() < c.opts.CrashAtSendRate {
+					crashed = n.fs.CrashClone(vfs.CrashCloneCfg{})
+				}
+			})
 			if err != nil {
 				return fmt.Errorf("node %d: %w", n.ID, err)
+			}
+			if crashed != nil {
+				// The messages left before the power cut; nothing after it
+				// (persisted state, applied results) survives or is seen.
+				for _, m := range msgs {
+					if m.GetType() != raftpb.MsgSnap {
+						c.send(m, nil)
+					}
+				}
+				c.CrashTo(n.ID, crashed)
+				c.SendCrashes++
+				c.Tracef("node %d lost power while sending %d messages", n.ID, len(msgs))
+				break
 			}
 			if out.SoftState != nil {
 				c.Tracef("node %d: %s, leader %d, term %d", n.ID, out.SoftState.RaftState, out.SoftState.Lead, n.rep.Term())

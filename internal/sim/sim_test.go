@@ -2,6 +2,7 @@ package sim
 
 import (
 	"testing"
+	"time"
 )
 
 func newHarness(t *testing.T, opts Options, clients int, appends uint64) (*Cluster, *Workload) {
@@ -33,10 +34,11 @@ func finish(t *testing.T, c *Cluster, w *Workload) {
 	if err := w.CheckAcked(log); err != nil {
 		fail(err)
 	}
+	start := time.Now()
 	if err := w.CheckLinearizable(); err != nil {
 		fail(err)
 	}
-	t.Logf("t=%dms acked=%d log=%d ops=%d", c.Now, w.Acked(), len(log), len(w.History()))
+	t.Logf("t=%dms acked=%d log=%d ops=%d porcupine=%s", c.Now, w.Acked(), len(log), len(w.History()), time.Since(start).Round(time.Millisecond))
 }
 
 func TestReplicationThreeNodes(t *testing.T) {

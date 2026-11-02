@@ -164,3 +164,49 @@ func TestTruncatedRaftLogIsRefusedAtStartup(t *testing.T) {
 		t.Fatalf("%v\ntrace: %s", err, c.SaveTrace(t.Name()))
 	}
 }
+
+// Nodes lose power at the moment they send, with leaders isolated at random
+// so a new leader must be chosen from nodes that may have just crashed. If
+// any node acknowledged entries before they were durable, a committed write
+// could disappear here; the leader is the only node allowed to send first,
+// because raft counts its own acknowledgment only after it persists.
+func TestCrashAtSendPreservesCommittedWrites(t *testing.T) {
+	for seed := uint64(300); seed < 340; seed++ {
+		t.Run(fmt.Sprint(seed), func(t *testing.T) {
+			t.Parallel()
+			c, w := newHarness(t, Options{Nodes: 5, Seed: seed, CrashAtSendRate: 0.02, MaxDelay: 3}, 3, 60)
+			rng := c.Rand()
+			for round := 0; round < 40 && !w.Done(); round++ {
+				if err := w.Steps(5 + rng.IntN(30)); err != nil {
+					t.Fatalf("%v\ntrace: %s", err, c.SaveTrace(t.Name()))
+				}
+				for _, n := range c.Nodes {
+					if !n.Up && rng.IntN(3) == 0 {
+						if err := c.Restart(n.ID); err != nil {
+							t.Fatalf("restart: %v\ntrace: %s", err, c.SaveTrace(t.Name()))
+						}
+					}
+				}
+				if l := c.Leader(); l != nil && rng.IntN(3) == 0 {
+					var rest []uint64
+					for _, n := range c.Nodes {
+						if n != l {
+							rest = append(rest, n.ID)
+						}
+					}
+					c.Partition([]uint64{l.ID}, rest)
+				} else if rng.IntN(2) == 0 {
+					c.Heal()
+				}
+			}
+			c.opts.CrashAtSendRate = 0 // let the cluster recover for the final checks
+			t.Logf("power cuts while sending: %d", c.SendCrashes)
+			for _, n := range c.Nodes {
+				if err := c.Restart(n.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			finish(t, c, w)
+		})
+	}
+}

@@ -98,7 +98,10 @@ func (w *Workload) CheckLinearizable() error {
 // On failure it writes Porcupine's visualization next to the traces.
 func CheckHistory(history []porcupine.Operation, name string) error {
 	BoundRetries(history)
-	res, info := porcupine.CheckOperationsVerbose(LogModel, history, 60*time.Second)
+	// Checks normally take well under a second (under -race too), but the
+	// search is exponential in the worst case; a rare history with many long,
+	// overlapping operations once needed more than 60 s under -race.
+	res, info := porcupine.CheckOperationsVerbose(LogModel, history, 3*time.Minute)
 	switch res {
 	case porcupine.Ok:
 		return nil
