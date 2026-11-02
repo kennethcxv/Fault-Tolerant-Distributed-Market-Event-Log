@@ -288,3 +288,5 @@ harmless.
 
 During an outage, the only copy of new events is the spool on the engine host.
 That disk is a single point of failure until the backlog drains.
+
+The implementation and its measured costs are in [integration.md](integration.md).

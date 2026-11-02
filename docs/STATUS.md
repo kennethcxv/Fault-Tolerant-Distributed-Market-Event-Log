@@ -30,10 +30,12 @@ milestone.
   `load`, `leader`, demo scripts, `docs/testing.md` (mutation checks).
 - M8 Consumer checkpointing: `replay.Consumer`, `mlogctl consume`, consumer
   backlog in status, restart tests in-process and with SIGKILL.
+- M9 Project 1 integration: C++ spool writer (TSan/ASan clean), example
+  engine, Go spool reader and publisher, `mlog-publisher`, cross-language
+  tests, `scripts/demo-project1.sh`, `docs/integration.md`.
 
 ## Remaining acceptance criteria
 
-- [ ] M9 C++ spool writer, publisher sidecar, CI build of the C++ side
 - [ ] M10 Benchmarks, metrics, multiprocess demo scripts, final docs, résumé bullets
 - [ ] Membership change (add/remove node), needed to replace a node whose disk is lost (D10)
 
@@ -48,7 +50,15 @@ None open.
 
 ## Next steps
 
-Start M9: C++ header-only spool writer (CRC32C, envelope v1, SPSC ring,
-background writer thread, GAP records), a C++ example and test built in CI,
-a Go spool reader, and `mlog-publisher` (tail spool, resume from the
-producer's last committed sequence). Then docs/integration.md for Project 1.
+Start M10: a benchmark harness (`mlog-bench` or scripts around `mlogctl
+load`) and docs/benchmarks.md:
+- standalone vs 1/3/5-node raft;
+- fsync always vs never;
+- batch size sweep;
+- tail latency;
+- recovery time and snapshot install time;
+- storage growth and Pebble write amplification;
+- replay throughput;
+- publisher throughput vs batch size.
+Then a final code review, fresh-clone check, README rewrite and résumé
+bullets.

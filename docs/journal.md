@@ -314,3 +314,47 @@ writing the local file for offset 6,000 and before committing it. On restart
 the consumer was already at its target, so it exited without committing. The
 crash window was described in the design but not handled. The consumer now
 commits its local offset at startup whenever the cluster checkpoint is behind.
+
+## 2026-11-02 — Milestone 9: Project 1 integration
+
+Done:
+
+- `integration/cpp/mlog_spool.h`, header-only C++17:
+  - CRC-32C and v1 envelope encoding;
+  - `SpoolWriter`, which recovers a torn tail and refuses mid-file corruption;
+  - `AsyncSpool`, a lock-free SPSC ring with a writer thread that records
+    drops as GAP records.
+- `spool_test.cpp` passes under ThreadSanitizer, AddressSanitizer and UBSan.
+- `example_engine.cpp`, a paced stand-in for the engine.
+- `internal/spool`: a Go reader that tails a growing file, and a `Publisher`
+  that resumes from the producer's last committed sequence. Because the spool
+  position is the producer sequence, spool to log is exactly once.
+  `cmd/mlog-publisher` serves backlog metrics.
+- Cross-language tests: the C++ engine's spool goes through a publisher
+  restarted midway, and the log matches the spool record for record with the
+  same replay hash. GAP counts in the log add up to the engine's drop count.
+- `scripts/demo-project1.sh`: 1M events at 100k/s from the C++ engine, with
+  the leader SIGKILLed midway. The log ended at producer sequence 1,000,000 =
+  offset 1,000,000, all three nodes agree, and the publisher drained 26 s
+  after the engine finished.
+- `docs/integration.md`, the contract for Project 1.
+
+Findings:
+
+- The first writer made one `write()` per record. An unpaced 200,000-event
+  burst dropped 132,396 events (reported correctly as GAP records). The
+  writer now encodes everything in a drain pass and makes one `write()`. A
+  failed write truncates the file back to the last good size and reports the
+  batch as a gap. With paced input it sustains 5 M events/s with no drops on
+  this machine (page cache, no fsync); drops start around 10 M/s.
+- `try_publish`: p50 42 ns, which is the `steady_clock` resolution here; p99
+  about 200–375 ns. Rare maxima up to 0.5 ms were not investigated.
+- `mlog_publisher_spool_unread_bytes` read 0 while the publisher was hundreds
+  of thousands of records behind. It only updated at end of file, which a
+  lagging reader never reaches. It now updates after every batch.
+- In the demo, the publisher (one producer, sequential batches of 500 into a
+  3-node cluster with fsync on macOS) ran at roughly 22–28k events/s, below
+  the engine's 100k/s. The spool absorbed the difference, as designed.
+  Milestone 10 measures how batch size affects this.
+- The demo script compared Prometheus's `1e+06` against `1000000` as strings
+  and waited forever.
