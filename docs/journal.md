@@ -112,3 +112,47 @@ Bugs found:
   at-least-once source does exactly that at the end of the log. Run now
   treats a batch with nothing at or past the next offset as caught up. Found
   by `TestRepeatedDeliveryIsIgnored`, which hung.
+
+## 2026-11-02 — Milestone 4: Raft replication
+
+Done:
+
+- Raft persistence in `internal/storage/raftlog.go`. Hard state, entries and
+  received snapshot metadata go in one batch, and entries overwritten by a
+  leader are truncated.
+- `internal/replica`: drives `RawNode` with the library's ordering (persist →
+  send → apply → Advance). It has no goroutines, so the server and the
+  simulator share it.
+- `internal/sim`: virtual time, seeded network faults, crash via
+  `CrashClone`, a workload with retries, a Porcupine model of the log
+  (including the dedup semantics), and checks I1–I7.
+- Server Raft engine:
+  - one goroutine owns the RawNode;
+  - leader-only writes with redirects;
+  - ReadIndex reads, served by followers too;
+  - pending writes fail as `outcome_unknown` on leadership loss;
+  - HTTP peer transport with per-peer ordered queues;
+  - fault-injection endpoint and Prometheus metrics.
+- `scripts/cluster.sh` runs a real multi-process cluster.
+
+Verified:
+
+- Simulator: 3- and 5-node replication, and an isolated leader stepping down,
+  all with linearizable histories.
+- In-process HTTP clusters: 3 and 5 nodes, follower redirect, linearizable
+  follower read, leader stop and catch-up, quorum loss (nothing
+  acknowledged) and recovery. Five consecutive `-race` runs passed.
+- Manually, with three `mlogd` processes: `kill -9` of the leader, a new
+  leader elected about a second later in term 3, a write accepted, and the
+  killed node rejoining as a follower with all three events.
+
+Bugs found:
+
+- Simulator bootstrap. `sim.New` opened each node as it created it, so the
+  nodes bootstrapped with peer sets {1}, {1,2} and {1,2,3}. Raft panicked with
+  "need non-empty snapshot". The fix opens nodes only after all exist. The
+  same mistake is possible in production with inconsistent `--peers` flags,
+  which led to D15.
+- Client error semantics. The client reported `outcome_unknown` after
+  connection-refused errors, even though a failed dial proves the request
+  never left. Only non-dial transport errors now count as possibly applied.

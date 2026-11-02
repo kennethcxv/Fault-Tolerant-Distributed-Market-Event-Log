@@ -7,21 +7,36 @@ storage engine come from those libraries. This repository adds everything around
 storage layout, Raft integration, state machine, snapshot transfer, transport, fault-injection
 harness, and replay engine.
 
-**Status: milestone 1 of 10. Design only, no code yet.** Nothing below is claimed to work
-until a test or benchmark in this repository shows it.
+**Status: milestones 1–4 of 10 done** (see [STATUS](docs/STATUS.md)). Nothing here is claimed to
+work unless a test or benchmark in this repository shows it.
 
 - [Design: guarantees, failure model, architecture](docs/design.md)
 - [Decision log](docs/decisions.md)
 - [Engineering journal](docs/journal.md)
 
+## Quick start
+
+Requires Go 1.27.
+
+```sh
+scripts/cluster.sh start 3                    # builds bin/ and starts three mlogd processes
+export MLOG_ENDPOINTS=$(scripts/cluster.sh endpoints)
+bin/mlogctl append --producer 1 "AAPL bid 189.50 x 100"
+bin/mlogctl read
+bin/mlogctl status                            # roles, terms, commit/applied, per-peer lag
+scripts/cluster.sh kill 1                     # SIGKILL a node; the others elect a leader
+scripts/cluster.sh restart 1                  # it rejoins and catches up
+scripts/cluster.sh wipe
+```
+
 ## Milestones
 
 | # | Milestone | Done when |
 |---|---|---|
-| 1 | Requirements, invariants, architecture | design reviewed ✔ |
-| 2 | Single-node append-only storage | append/read/checkpoint tests pass under `-race` |
-| 3 | Versioned events, deterministic replay | golden replay hash; corruption and duplicate tests |
-| 4 | Raft replication | 3-node cluster elects, replicates, survives leader change |
+| 1 | Requirements, invariants, architecture | ✔ design.md, decisions.md |
+| 2 | Single-node append-only storage | ✔ storage, fsm, standalone server tests |
+| 3 | Versioned events, deterministic replay | ✔ golden fixture, replay tests |
+| 4 | Raft replication | ✔ simulator + HTTP cluster tests |
 | 5 | Durable restart and recovery | crash tests on the crash-simulating filesystem |
 | 6 | Snapshots and log compaction | a lagging follower recovers through snapshot install |
 | 7 | Fault-injection harness | randomized runs pass I1–I7 and Porcupine |

@@ -199,3 +199,16 @@ Rejected:
 
 Cost: the spool host is a single point of failure until the backlog drains, and
 there is one more process to run.
+
+## D15. Reject peer traffic from nodes started with a different peer list
+
+Added in milestone 4. Each node hashes its `--peers` map into a cluster
+fingerprint. Every peer request carries it, and a node rejects requests whose
+fingerprint differs from its own (HTTP 409, logged as an error).
+
+Bootstrap membership comes from that flag, so a node started with a different
+list would form a different initial configuration. The simulator showed what
+that looks like: a harness bug bootstrapped nodes with peer sets {1}, {1,2}
+and {1,2,3}, and raft panicked when the leader decided a follower needed a
+snapshot that didn't exist. etcd guards against the same mistake with a
+cluster ID.

@@ -15,10 +15,12 @@ milestone.
 - M3 Versioned events and deterministic replay: `internal/orderbook` (schema v1,
   book, generator), `internal/replay` (engine, checkpoint files),
   `fixtures/orderbook-v1`, `mlogctl replay`.
+- M4 Raft replication: `internal/replica`, Raft persistence, `internal/sim`
+  (simulator, Porcupine model), Raft engine and HTTP transport in
+  `internal/server`, metrics, fault-injection endpoint, `scripts/cluster.sh`.
 
 ## Remaining acceptance criteria
 
-- [ ] M4 Raft replication (`internal/replica`, peer transport, 3- and 5-node clusters)
 - [ ] M5 Restart recovery; crash tests on the crash-simulating filesystem
 - [ ] M6 Snapshots, raft-log compaction, snapshot transfer and install
 - [ ] M7 Deterministic simulator, Porcupine checks, the eight required fault scenarios
@@ -29,8 +31,8 @@ milestone.
 
 ## Latest verification
 
-`go test -race -count=3 ./...`: event, storage, fsm and server packages pass
-(2026-11-02, Apple M4 Max, macOS 27.0.1, Go 1.27.3).
+`go test -race -count=1 ./...` passes; server cluster tests passed 5 runs in a
+row (2026-11-02, Apple M4 Max, macOS 27.0.1, Go 1.27.3).
 
 ## Active issues
 
@@ -38,6 +40,6 @@ None open.
 
 ## Next steps
 
-Start M4: `internal/replica` (RawNode + MemoryStorage + Pebble persistence,
-Ready loop), Raft persistence in `internal/storage`, HTTP peer transport, and
-the Raft engine in `internal/server` with leader redirects and ReadIndex.
+Start M5: simulator crash tests (leader crash mid-write, follower crash, crash
+with unsynced data kept at random, repeated crash/restart), a check that
+fsync=never can lose acknowledged writes, and multiprocess restart tests.
