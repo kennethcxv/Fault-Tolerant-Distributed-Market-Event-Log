@@ -190,3 +190,48 @@ What this means: a node whose disk lost acknowledged data can't rejoin under
 its old identity. It's detected and stopped. Bringing back a replacement needs
 a membership change, which isn't implemented yet (D10). Until it is, the
 cluster runs with one less failure of headroom.
+
+## 2026-11-02 — Milestone 6: snapshots and log compaction
+
+Done:
+
+- Periodic snapshots and log compaction in the replica.
+- State-machine snapshot streaming (`storage/snapshot.go`): export from a
+  consistent Pebble snapshot, durable receive into a CRC-checked file, and a
+  chunked install that writes the applied index last.
+- HTTP snapshot transfer.
+- `replica.Open` finishes an install that a crash interrupted.
+- Tests:
+  - storage round trip, damaged and mismatched streams, and a crash after each
+    of the first five install batches;
+  - simulator: a lagging follower catches up via snapshot, and a crash during
+    install (the test asserts that the crash point left applied < snapshot
+    index, so the finish-at-startup path really ran);
+  - 10 seeds of random crashes with compaction on;
+  - an HTTP cluster follower catching up via snapshot.
+- Manually, with three processes and `--snapshot-entries 20`: a killed
+  follower restored a snapshot at index 64 and `mlogctl verify` reported all
+  three nodes agree on offsets 1..120.
+
+Design change: the leader's state is at its applied index A, but raft's
+snapshot may be at an older S. Installing state at A under metadata at S
+would make raft re-deliver S+1..A on top of state that already contains them.
+For events that's harmless, since apply is idempotent by index. For membership
+changes it would apply them to raft out of order. The leader now rewrites the
+outgoing snapshot metadata to (A, term(A), membership at A), and the follower
+checks that the installed state is at exactly that index.
+
+Findings:
+
+- Under `-race`, Pebble's in-memory filesystem inverts every byte of a buffer
+  after `Write`. This flushes out code that assumes the buffer is unchanged.
+  `io.Copy` from a `bytes.Reader` passes the reader's backing array to
+  `Write`, so receiving a snapshot destroyed the sender's copy. The test passed
+  without `-race` and failed with it. Real files never do this, but the
+  simulator could deliver the same bytes twice. `ReceiveSnapshot` now copies
+  through its own buffer.
+- I had fsynced the snapshot-and-compact batch, with a comment saying the
+  fsync made earlier state-machine batches durable. A mutation run with that
+  fsync removed broke no crash test. The comment had the reasoning wrong: WAL
+  order alone guarantees the compaction can't outlive the batches it depends
+  on. The fsync was removed and D4 was corrected.

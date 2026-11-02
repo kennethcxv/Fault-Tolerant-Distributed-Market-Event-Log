@@ -229,16 +229,24 @@ Two restart details come from etcd-io/raft's API:
   therefore stored in `m/confstate`, in the same batch as the applied index, and
   given to raft on restart.
 
-**Snapshots and compaction.** Every K applied entries, a node records a Raft
-snapshot at its applied index. It then drops log entries older than the index
-minus a retention margin. The snapshot's data is the state machine itself. When
-a follower falls behind the leader's first log index, the leader streams its
-event store from a consistent Pebble snapshot. The follower writes the stream to
-a file and fsyncs it before handing the snapshot to Raft. It deletes the file
-only once installation commits, and it detects a partial install because the
-applied index is written last. A crash mid-install is recovered by installing
-again from the file. An install costs O(log size), the main scaling limit
-(D6).
+**Snapshots and compaction.** Every K applied entries (`--snapshot-entries`),
+a node records a Raft snapshot at its applied index and drops log entries older
+than the index minus a retention margin (`--snapshot-keep`). The snapshot's
+data is the state machine itself.
+
+When a follower falls behind the leader's first log index, raft asks to send a
+snapshot. The leader then streams its event store from a consistent Pebble
+snapshot taken at its current applied index A. That can be newer than raft's
+own snapshot S, so the leader rewrites the outgoing message's metadata to A,
+A's term and the membership as of A. Every entry up to A is committed, so this
+is a valid snapshot. It also keeps the follower's raft log and state machine at
+exactly the same index after installation.
+
+The follower writes the stream to a file and fsyncs it before handing the
+snapshot to Raft. It deletes the file only once installation commits, and it
+detects a partial install because the applied index is written last. A crash
+mid-install is recovered at startup by installing again from the file. An
+install costs O(log size), the main scaling limit (D6).
 
 **Reads.** Default reads are served by any node from its local committed
 prefix. With `linearizable=true`, the node gets a read index from the leader

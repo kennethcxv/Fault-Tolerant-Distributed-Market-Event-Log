@@ -63,13 +63,15 @@ mode. Pebble has one WAL and recovers a prefix of it, so making a later Raft
 batch durable makes every earlier state-machine batch durable too. That saves
 one fsync per Ready.
 
-This depends on:
+This depends on Pebble writing a single WAL and recovering a prefix of it.
+WAL failover must stay disabled.
 
-- Pebble writing a single WAL. WAL failover must stay disabled.
-- Raft-log compaction always following a synced write that comes after the
-  applies it relies on.
-
-Both get a test.
+Raft-log compaction is safe for the same reason. The compaction batch enters
+the WAL after the state-machine batches for the entries it deletes, so it can
+only survive a crash if they do. The design first fsynced the compaction batch
+"to make earlier batches durable". Milestone 6 showed that fsync was
+unnecessary: removing it broke none of the crash tests with compaction, and the
+WAL-order argument explains why. It was removed.
 
 Rejected: separate DBs, which need two fsyncs or explicit sync points before
 compaction. Also rejected: fsyncing every state-machine batch, which costs an

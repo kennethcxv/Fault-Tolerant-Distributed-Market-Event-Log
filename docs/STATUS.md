@@ -22,10 +22,12 @@ milestone.
   uncommitted entries, whole-cluster power loss, torn writes, fsync=never
   loss), startup log-truncation check, raft panics become node failure,
   real-disk corruption and WAL truncation tests, `mlogctl verify`.
+- M6 Snapshots and log compaction: periodic snapshot + compaction, state
+  machine streaming, HTTP transfer, crash-safe install, simulator and HTTP
+  tests, `--snapshot-entries`/`--snapshot-keep`.
 
 ## Remaining acceptance criteria
 
-- [ ] M6 Snapshots, raft-log compaction, snapshot transfer and install
 - [ ] M7 Deterministic simulator, Porcupine checks, the eight required fault scenarios
 - [ ] M8 Consumer checkpoint/restart flow, dedup under duplicated requests
 - [ ] M9 C++ spool writer, publisher sidecar, CI build of the C++ side
@@ -43,8 +45,8 @@ None open.
 
 ## Next steps
 
-Start M6: create a Raft snapshot every K applied entries and compact the log
-(storage.SaveSnapshotAndCompact). Stream the state machine for MsgSnap (sender
-side in the transport, receiver writes a file, fsyncs, then steps raft).
-Install in replica.Ready. Add simulator snapshot transfer, then tests for a
-lagging follower and a crash mid-install.
+Start M7: a randomized simulator test that combines everything (drops,
+duplicates, delays, partitions, crashes, snapshots), many seeds, Porcupine
+on every run, and failure traces. Then the eight required scenarios as named
+tests, and a multiprocess e2e test that builds mlogd and injects faults over
+/debug/fault.
