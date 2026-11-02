@@ -190,6 +190,34 @@ func (c *Client) Verify(ctx context.Context, endpoint string, to uint64) (api.Ve
 	return v, json.NewDecoder(resp.Body).Decode(&v)
 }
 
+// SetFault replaces one node's injected faults; a zero config clears them.
+func (c *Client) SetFault(ctx context.Context, endpoint string, cfg api.FaultConfig) error {
+	buf, _ := json.Marshal(cfg)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint+"/debug/fault", bytes.NewReader(buf))
+	if err != nil {
+		return err
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return decodeError(resp)
+	}
+	return nil
+}
+
+func (c *Client) Fault(ctx context.Context, endpoint string) (api.FaultConfig, error) {
+	var f api.FaultConfig
+	resp, err := c.get(ctx, endpoint, "/debug/fault")
+	if err != nil {
+		return f, err
+	}
+	defer resp.Body.Close()
+	return f, json.NewDecoder(resp.Body).Decode(&f)
+}
+
 // Status queries one specific node.
 func (c *Client) Status(ctx context.Context, endpoint string) (api.Status, error) {
 	var s api.Status

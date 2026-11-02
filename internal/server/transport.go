@@ -17,6 +17,8 @@ import (
 
 	"go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/protobuf/encoding/protodelim"
+
+	"github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/api"
 )
 
 const (
@@ -227,26 +229,19 @@ func decodeMessages(r io.Reader) ([]*raftpb.Message, error) {
 // demos create partitions without root access to the network.
 type faults struct {
 	mu   sync.Mutex
-	cfg  FaultConfig
+	cfg  api.FaultConfig
 	rand *rand.Rand
-}
-
-type FaultConfig struct {
-	DropTo   []uint64 `json:"drop_to,omitempty"`   // drop everything sent to these peers
-	DropFrom []uint64 `json:"drop_from,omitempty"` // drop everything received from these peers
-	DropRate float64  `json:"drop_rate,omitempty"` // drop this fraction of outbound batches
-	DelayMS  int      `json:"delay_ms,omitempty"`  // delay every outbound batch
 }
 
 func newFaults() *faults { return &faults{rand: rand.New(rand.NewPCG(rand.Uint64(), 0))} }
 
-func (f *faults) set(cfg FaultConfig) {
+func (f *faults) set(cfg api.FaultConfig) {
 	f.mu.Lock()
 	f.cfg = cfg
 	f.mu.Unlock()
 }
 
-func (f *faults) get() FaultConfig {
+func (f *faults) get() api.FaultConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.cfg

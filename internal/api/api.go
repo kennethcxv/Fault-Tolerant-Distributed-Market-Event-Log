@@ -87,3 +87,12 @@ type VerifyResponse struct {
 	LastOffset uint64 `json:"last_offset"`
 	SHA256     string `json:"sha256"`
 }
+
+// FaultConfig is a node's injected network faults (PUT /debug/fault). It is
+// how the multi-process demos and tests create partitions without root access.
+type FaultConfig struct {
+	DropTo   []uint64 `json:"drop_to,omitempty"`   // drop everything sent to these peers
+	DropFrom []uint64 `json:"drop_from,omitempty"` // drop everything received from these peers
+	DropRate float64  `json:"drop_rate,omitempty"` // drop this fraction of outbound batches
+	DelayMS  int      `json:"delay_ms,omitempty"`  // delay every outbound batch
+}

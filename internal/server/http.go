@@ -116,7 +116,7 @@ func (n *Node) handleGetFault(w http.ResponseWriter, r *http.Request) {
 
 // handleSetFault replaces this node's injected faults; an empty body clears them.
 func (n *Node) handleSetFault(w http.ResponseWriter, r *http.Request) {
-	var cfg FaultConfig
+	var cfg api.FaultConfig
 	if r.ContentLength != 0 && !decodeBody(w, r, &cfg) {
 		return
 	}

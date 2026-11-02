@@ -19,12 +19,15 @@ type command struct {
 
 var commands = map[string]command{
 	"status":     {"show every node's role, term, commit/applied index and lag", cmdStatus},
+	"leader":     {"print the current leader's id (for scripts)", cmdLeader},
 	"append":     {"append events: append --producer ID --seq N [--type T] PAYLOAD...", cmdAppend},
 	"read":       {"read events: read [--from N] [--limit N] [--linearizable]", cmdRead},
 	"producer":   {"show a producer's last committed sequence: producer ID", cmdProducer},
 	"checkpoint": {"get or set a consumer checkpoint: checkpoint NAME [OFFSET]", cmdCheckpoint},
 	"replay":     {"rebuild the order book from the log and print its state hash", cmdReplay},
 	"verify":     {"checksum every node's log over a common prefix and compare", cmdVerify},
+	"fault":      {"inject network faults: fault show | isolate ID | set ID [flags] | heal", cmdFault},
+	"load":       {"append synthetic order-book events and report throughput and latency", cmdLoad},
 }
 
 func main() {
