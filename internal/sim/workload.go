@@ -110,10 +110,15 @@ func (w *Workload) issue(cl *simClient) {
 	w.nextReq++
 	reqID := w.nextReq
 	if w.ReadPercent > 0 && w.c.rng.IntN(100) < w.ReadPercent {
+		// Reads go to a random live node: followers serve ReadIndex reads
+		// too, and they are where a read could be answered before applying.
+		node := w.c.Nodes[w.c.rng.IntN(len(w.c.Nodes))]
+		if !node.Up {
+			node = leader
+		}
 		in := OpInput{Read: true, Offset: 1 + uint64(w.c.rng.IntN(int(leader.rep.FSM().LastOffset())+2))}
-		rctx := binary.LittleEndian.AppendUint64(nil, reqID)
-		leader.rep.ReadIndex(rctx)
-		cl.op = &pendingOp{node: leader.ID, reqID: reqID, input: in, callAt: w.c.Now}
+		node.rep.ReadIndex(binary.LittleEndian.AppendUint64(nil, reqID))
+		cl.op = &pendingOp{node: node.ID, reqID: reqID, input: in, callAt: w.c.Now}
 		return
 	}
 	if cl.nextSeq > cl.limit {
@@ -188,6 +193,28 @@ func (w *Workload) finish(cl *simClient, out Output, returnAt int64) {
 	cl.op = nil
 	if op.input.Read && out.Unknown {
 		return // reads have no effect, so an unanswered read is not an operation
+	}
+	// A timed-out append is recorded as possibly taking effect at any later
+	// time, which makes the checker's search explode. Once a retry of the
+	// same sequence returns, every earlier attempt is settled: if the retry
+	// says duplicate, one of them took effect before it returned; if it says
+	// appended, none did, and dedup means none ever can. So their effect, if
+	// any, lies before this return time, and bounding them by it is sound.
+	if !op.input.Read && !out.Unknown {
+		for i := len(w.history) - 1; i >= 0; i-- {
+			h := &w.history[i]
+			if h.ClientId != cl.id {
+				continue
+			}
+			in := h.Input.(OpInput)
+			if in.Read {
+				continue // the client may read between retries
+			}
+			if in.Seq != op.input.Seq || !h.Output.(Output).Unknown {
+				break
+			}
+			h.Return = returnAt
+		}
 	}
 	w.history = append(w.history, porcupine.Operation{ClientId: cl.id, Input: op.input, Call: op.callAt, Output: out, Return: returnAt})
 }
