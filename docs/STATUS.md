@@ -18,10 +18,13 @@ milestone.
 - M4 Raft replication: `internal/replica`, Raft persistence, `internal/sim`
   (simulator, Porcupine model), Raft engine and HTTP transport in
   `internal/server`, metrics, fault-injection endpoint, `scripts/cluster.sh`.
+- M5 Durable restart and recovery: simulator crash tests (truncated
+  uncommitted entries, whole-cluster power loss, torn writes, fsync=never
+  loss), startup log-truncation check, raft panics become node failure,
+  real-disk corruption and WAL truncation tests, `mlogctl verify`.
 
 ## Remaining acceptance criteria
 
-- [ ] M5 Restart recovery; crash tests on the crash-simulating filesystem
 - [ ] M6 Snapshots, raft-log compaction, snapshot transfer and install
 - [ ] M7 Deterministic simulator, Porcupine checks, the eight required fault scenarios
 - [ ] M8 Consumer checkpoint/restart flow, dedup under duplicated requests
@@ -40,6 +43,8 @@ None open.
 
 ## Next steps
 
-Start M5: simulator crash tests (leader crash mid-write, follower crash, crash
-with unsynced data kept at random, repeated crash/restart), a check that
-fsync=never can lose acknowledged writes, and multiprocess restart tests.
+Start M6: create a Raft snapshot every K applied entries and compact the log
+(storage.SaveSnapshotAndCompact). Stream the state machine for MsgSnap (sender
+side in the transport, receiver writes a file, fsyncs, then steps raft).
+Install in replica.Ready. Add simulator snapshot transfer, then tests for a
+lagging follower and a crash mid-install.

@@ -156,3 +156,37 @@ Bugs found:
 - Client error semantics. The client reported `outcome_unknown` after
   connection-refused errors, even though a failed dial proves the request
   never left. Only non-dial transport errors now count as possibly applied.
+
+## 2026-11-02 — Milestone 5: durable restart and recovery
+
+Done:
+
+- Simulator crash tests:
+  - a leader crashes holding uncommitted entries, and they are truncated
+    when it rejoins;
+  - the whole cluster loses power (5 seeds), and every acknowledged write
+    survives;
+  - random crash/restart cycles that keep a random fraction of unsynced data
+    (10 seeds);
+  - `--fsync=never` with a power loss: 50 acknowledged, 0 survived, which
+    documents that the mode voids G1.
+- Mutation check of the crash tests. With fsync disabled in the replica's
+  persist path, the power-loss test fails: raft panics on restart with
+  `tocommit(61) is out of range [lastIndex(3)]`. So the test does depend on
+  fsync.
+- Startup refuses a hard state whose commit index is past the end of the log.
+- The Raft engine recovers raft's panics and turns them into node failure with
+  an explanation, instead of crashing the process.
+- Real-disk tests:
+  - a corrupt record on a follower stops only that node;
+  - truncating a follower's newest WAL file: Pebble recovers a consistent
+    prefix and the node starts, but the leader still remembers its old match
+    index. Raft then stops the node with `tocommit(84) is out of range
+    [lastIndex(45)]`. Same result on all three runs.
+- `GET /v1/verify` and `mlogctl verify`: checksum every node's log over a
+  common prefix and compare.
+
+What this means: a node whose disk lost acknowledged data can't rejoin under
+its old identity. It's detected and stopped. Bringing back a replacement needs
+a membership change, which isn't implemented yet (D10). Until it is, the
+cluster runs with one less failure of headroom.

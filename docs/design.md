@@ -80,7 +80,14 @@ Tolerated: up to f crashed or partitioned nodes in a cluster of 2f+1 (1 of 3,
 Detected, not tolerated automatically: silent disk corruption such as bit flips
 and truncated files. The record CRC and Pebble's block and WAL checksums detect
 it. The node stops serving instead of returning bad data. Recovery is an
-operator action (D10).
+operator action (D10). A disk that lost acknowledged Raft entries is caught at
+whichever point comes first:
+
+- at startup, if the hard state commits past the end of the log;
+- or by raft itself, when the leader commits an entry the node no longer has.
+
+Either way the node stops with an explanation. Its peers keep running
+(`TestTruncatedRaftLogIsRefusedAtStartup`, `TestTruncatedWALOnFollowerIsDetected`).
 
 Not handled:
 
