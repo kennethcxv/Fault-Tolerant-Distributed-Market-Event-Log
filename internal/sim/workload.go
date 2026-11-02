@@ -116,7 +116,14 @@ func (w *Workload) issue(cl *simClient) {
 		if !node.Up {
 			node = leader
 		}
-		in := OpInput{Read: true, Offset: 1 + uint64(w.c.rng.IntN(int(leader.rep.FSM().LastOffset())+2))}
+		// Half the reads target the newest offsets, where a stale read
+		// would actually show; the rest spread over the whole log.
+		last := leader.rep.FSM().LastOffset()
+		offset := 1 + uint64(w.c.rng.IntN(int(last)+2))
+		if w.c.rng.IntN(2) == 0 {
+			offset = max(1, last+1-uint64(w.c.rng.IntN(3)))
+		}
+		in := OpInput{Read: true, Offset: offset}
 		node.rep.ReadIndex(binary.LittleEndian.AppendUint64(nil, reqID))
 		cl.op = &pendingOp{node: node.ID, reqID: reqID, input: in, callAt: w.c.Now}
 		return
