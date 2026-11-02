@@ -11,6 +11,7 @@
 package sim
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -316,4 +317,18 @@ func (c *Cluster) Close() {
 			n.Up = false
 		}
 	}
+}
+
+// WithStoppedStore opens a crashed node's storage so a test can damage it
+// before Restart.
+func (c *Cluster) WithStoppedStore(id uint64, fn func(*storage.Store) error) error {
+	n := c.Node(id)
+	if n.Up {
+		return fmt.Errorf("node %d is running", id)
+	}
+	st, err := storage.Open(storage.Options{Dir: "data", FS: n.fs, Logger: c.opts.Logger})
+	if err != nil {
+		return err
+	}
+	return errors.Join(fn(st), st.Close())
 }

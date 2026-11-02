@@ -241,3 +241,14 @@ func (w *Workload) Run(maxSteps int, done func() bool) error {
 		return false
 	})
 }
+
+// Steps advances n ticks with the workload active.
+func (w *Workload) Steps(n int) error {
+	for range n {
+		w.Tick()
+		if err := w.c.Step(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
