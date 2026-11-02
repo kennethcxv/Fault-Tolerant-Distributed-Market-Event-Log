@@ -31,6 +31,10 @@ func NewGenerator(seed uint64, instruments int) *Generator {
 	return g
 }
 
+// StartIDsAt makes order ids start after base, so several generators can
+// feed the same book without colliding (e.g. base = producer << 40).
+func (g *Generator) StartIDsAt(base uint64) { g.nextID = base }
+
 func (g *Generator) Next() Msg {
 	r := g.rng.IntN(100)
 	switch {

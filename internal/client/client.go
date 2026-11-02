@@ -229,24 +229,33 @@ func (c *Client) Status(ctx context.Context, endpoint string) (api.Status, error
 	return s, json.NewDecoder(resp.Body).Decode(&s)
 }
 
-// getJSON tries the leader first, then every endpoint.
+// getJSON tries the leader first, then every endpoint, and keeps retrying
+// transient failures (no leader yet, read barrier timeout) until ctx ends.
 func (c *Client) getJSON(ctx context.Context, path string, out any) error {
-	var lastErr error
-	targets := append([]string{c.target()}, c.endpoints...)
-	for _, t := range targets {
-		resp, err := c.get(ctx, t, path)
-		if err != nil {
-			lastErr = err
-			if ctx.Err() != nil {
-				return err
+	backoff := 20 * time.Millisecond
+	for {
+		var lastErr error
+		for _, t := range append([]string{c.target()}, c.endpoints...) {
+			resp, err := c.get(ctx, t, path)
+			if err != nil {
+				lastErr = err
+				continue
 			}
-			continue
+			err = json.NewDecoder(resp.Body).Decode(out)
+			resp.Body.Close()
+			return err
 		}
-		err = json.NewDecoder(resp.Body).Decode(out)
-		resp.Body.Close()
-		return err
+		var apiErr *api.Error
+		if errors.As(lastErr, &apiErr) && apiErr.Code != api.CodeNoLeader && apiErr.Code != api.CodeTimeout {
+			return lastErr
+		}
+		select {
+		case <-ctx.Done():
+			return lastErr
+		case <-time.After(backoff):
+		}
+		backoff = min(2*backoff, 500*time.Millisecond)
 	}
-	return lastErr
 }
 
 func (c *Client) get(ctx context.Context, base, path string) (*http.Response, error) {

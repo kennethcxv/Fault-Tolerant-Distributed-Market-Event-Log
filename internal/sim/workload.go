@@ -61,9 +61,10 @@ type pendingOp struct {
 func NewWorkload(c *Cluster, clients int, appendsPerClient uint64) *Workload {
 	w := &Workload{c: c, Timeout: 300, acked: map[[2]uint64]uint64{}}
 	for i := range clients {
+		gen := orderbook.NewGenerator(c.opts.Seed*1000+uint64(i), 2)
+		gen.StartIDsAt(uint64(i+1) << 40)
 		w.clients = append(w.clients, &simClient{
-			id: i, producer: uint64(i + 1), nextSeq: 1, limit: appendsPerClient,
-			gen: orderbook.NewGenerator(c.opts.Seed*1000+uint64(i), 2), events: map[uint64]fsm.EventIn{},
+			id: i, producer: uint64(i + 1), nextSeq: 1, limit: appendsPerClient, gen: gen, events: map[uint64]fsm.EventIn{},
 		})
 	}
 	prevResult, prevRead := c.opts.OnResult, c.opts.OnRead
