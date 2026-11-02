@@ -179,6 +179,17 @@ func (c *Client) Consumer(ctx context.Context, name string) (api.ConsumerRespons
 	return r, err
 }
 
+// Verify asks one node to checksum records 1..to (0 means its last offset).
+func (c *Client) Verify(ctx context.Context, endpoint string, to uint64) (api.VerifyResponse, error) {
+	var v api.VerifyResponse
+	resp, err := c.get(ctx, endpoint, fmt.Sprintf("/v1/verify?to=%d", to))
+	if err != nil {
+		return v, err
+	}
+	defer resp.Body.Close()
+	return v, json.NewDecoder(resp.Body).Decode(&v)
+}
+
 // Status queries one specific node.
 func (c *Client) Status(ctx context.Context, endpoint string) (api.Status, error) {
 	var s api.Status

@@ -150,3 +150,39 @@ func cmdCheckpoint(ctx context.Context, e *env, args []string) error {
 	}
 	return fmt.Errorf("usage: checkpoint NAME [OFFSET]")
 }
+
+// cmdVerify compares replicas: each node re-reads and checksums records
+// 1..N, where N is the smallest last offset among reachable nodes.
+func cmdVerify(ctx context.Context, e *env, args []string) error {
+	to := uint64(1<<63 - 1)
+	reachable := 0
+	for _, ep := range e.c.Endpoints() {
+		if st, err := e.c.Status(ctx, ep); err == nil && st.Failed == "" {
+			to = min(to, st.LastOffset)
+			reachable++
+		}
+	}
+	if reachable == 0 {
+		return fmt.Errorf("no reachable nodes")
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintf(w, "NODE\tCHECKED\tLAST_OFFSET\tSHA256(1..%d)\n", to)
+	hashes := map[string]bool{}
+	verified := 0
+	for _, ep := range e.c.Endpoints() {
+		v, err := e.c.Verify(ctx, ep, to)
+		if err != nil {
+			fmt.Fprintf(w, "%s\t-\t-\t%v\n", ep, err)
+			continue
+		}
+		hashes[v.SHA256] = true
+		verified++
+		fmt.Fprintf(w, "%s\t%d\t%d\t%s\n", ep, v.To, v.LastOffset, v.SHA256)
+	}
+	w.Flush()
+	if len(hashes) > 1 {
+		return fmt.Errorf("replicas disagree on offsets 1..%d", to)
+	}
+	fmt.Printf("%d nodes agree on offsets 1..%d\n", verified, to)
+	return nil
+}

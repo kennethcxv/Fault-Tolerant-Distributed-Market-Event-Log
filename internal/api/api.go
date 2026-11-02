@@ -81,3 +81,9 @@ type Status struct {
 	Peers      []PeerStatus `json:"peers,omitempty"`
 	Failed     string       `json:"failed,omitempty"`
 }
+
+type VerifyResponse struct {
+	To         uint64 `json:"to"`
+	LastOffset uint64 `json:"last_offset"`
+	SHA256     string `json:"sha256"`
+}

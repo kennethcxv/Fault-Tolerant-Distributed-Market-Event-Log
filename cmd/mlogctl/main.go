@@ -24,6 +24,7 @@ var commands = map[string]command{
 	"producer":   {"show a producer's last committed sequence: producer ID", cmdProducer},
 	"checkpoint": {"get or set a consumer checkpoint: checkpoint NAME [OFFSET]", cmdCheckpoint},
 	"replay":     {"rebuild the order book from the log and print its state hash", cmdReplay},
+	"verify":     {"checksum every node's log over a common prefix and compare", cmdVerify},
 }
 
 func main() {

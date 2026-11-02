@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -31,6 +33,7 @@ func (n *Node) routes() *http.ServeMux {
 	mux.HandleFunc("GET /v1/consumers/{name}", n.guard(n.handleConsumer))
 	mux.HandleFunc("POST /v1/consumers/{name}/checkpoint", n.guard(n.handleCheckpoint))
 	mux.HandleFunc("GET /v1/status", n.handleStatus)
+	mux.HandleFunc("GET /v1/verify", n.guard(n.handleVerify))
 	mux.Handle("GET /metrics", promhttp.HandlerFor(n.m.reg, promhttp.HandlerOpts{}))
 	mux.HandleFunc("GET /debug/fault", n.handleGetFault)
 	mux.HandleFunc("PUT /debug/fault", n.handleSetFault)
@@ -208,6 +211,30 @@ func (n *Node) handleStatus(w http.ResponseWriter, r *http.Request) {
 		st.Failed = err.Error()
 	}
 	writeJSON(w, http.StatusOK, st)
+}
+
+// handleVerify re-reads records 1..to, checking every checksum, and returns
+// a SHA-256 over them. Replicas that agree on a prefix return the same hash,
+// which is how mlogctl verify compares nodes after a recovery.
+func (n *Node) handleVerify(w http.ResponseWriter, r *http.Request) {
+	last := n.fsm.LastOffset()
+	to, err := parseUint(r.URL.Query().Get("to"), last)
+	if err != nil {
+		writeError(w, &api.Error{Code: api.CodeInvalid, Message: err.Error()})
+		return
+	}
+	to = min(to, last)
+	h := sha256.New()
+	for from := uint64(1); from <= to; {
+		raw, count, err := n.store.ReadRaw(from, to, maxReadEvents, maxReadBytes)
+		if err != nil {
+			n.storageError(w, err)
+			return
+		}
+		h.Write(raw)
+		from += uint64(count)
+	}
+	writeJSON(w, http.StatusOK, api.VerifyResponse{To: to, LastOffset: last, SHA256: hex.EncodeToString(h.Sum(nil))})
 }
 
 func (n *Node) barrier(w http.ResponseWriter, r *http.Request) bool {
