@@ -1,0 +1,4 @@
+writers=1 total_syncs_per_s=3319 per_writer=3319 mean_sync=0.30ms
+writers=2 total_syncs_per_s=5811 per_writer=2906 mean_sync=0.34ms
+writers=3 total_syncs_per_s=7933 per_writer=2644 mean_sync=0.38ms
+writers=5 total_syncs_per_s=10043 per_writer=2009 mean_sync=0.50ms

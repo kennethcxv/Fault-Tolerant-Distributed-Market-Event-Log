@@ -195,9 +195,14 @@ time out.
 **Backpressure.** The leader caps uncommitted bytes in Raft. Past the cap,
 appends fail at once with `overloaded` instead of queueing without bound.
 
-**Ready ordering** follows etcd-io/raft's contract: persist, then send, then
-apply, then Advance. Because a node sends messages only after its log is
-durable, a follower never acknowledges an entry it could lose in a crash.
+**Ready ordering** follows etcd-io/raft's contract: persist, send, apply,
+then Advance. Followers send only after their log is durable, so a follower
+never acknowledges an entry it could lose in a crash.
+
+The leader sends before persisting the same Ready, so its disk write overlaps
+the followers' (D16). The library counts the leader's own acknowledgment only
+in Advance, after persistence, so a commit still needs a durable majority. A
+Ready that changes term or vote persists first.
 
 **Storage keyspace** (one Pebble DB):
 

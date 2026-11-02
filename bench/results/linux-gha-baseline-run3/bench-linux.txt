@@ -1,0 +1,6 @@
+PASS
+ok  	github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/fsm	0.005s
+PASS
+ok  	github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/replay	0.005s
+PASS
+ok  	github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/event	0.003s

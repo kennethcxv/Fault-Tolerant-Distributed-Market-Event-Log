@@ -1,0 +1,6 @@
+producers=8 batch=10 events/producer=10000 elapsed=9.329s
+appended=80000 duplicates=0 requests=8000 throughput=8575 events/s
+append latency p50=3.047588ms p90=7.600571ms p99=121.291379ms p99.9=564.962984ms max=566.9314ms
+404 page not found
+
+disk_kb_node1 22432

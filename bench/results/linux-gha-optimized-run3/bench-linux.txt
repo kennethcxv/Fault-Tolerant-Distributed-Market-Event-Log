@@ -1,0 +1,30 @@
+goos: linux
+goarch: amd64
+pkg: github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/fsm
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkApply/sync=true/batch=1-4         	    1500	   2291265 ns/op	       436.5 events/s
+BenchmarkApply/sync=true/batch=10-4        	    7296	    387536 ns/op	     25814 events/s
+BenchmarkApply/sync=true/batch=100-4       	    7556	    301008 ns/op	    341101 events/s
+BenchmarkApply/sync=true/batch=1000-4      	    2353	   1099724 ns/op	    951479 events/s
+BenchmarkApply/sync=false/batch=1-4        	  598191	      4049 ns/op	    253323 events/s
+BenchmarkApply/sync=false/batch=10-4       	  131593	     15503 ns/op	    663156 events/s
+BenchmarkApply/sync=false/batch=100-4      	   17607	    133463 ns/op	    781600 events/s
+BenchmarkApply/sync=false/batch=1000-4     	    1785	   2710522 ns/op	    378861 events/s
+PASS
+ok  	github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/fsm	28.282s
+goos: linux
+goarch: amd64
+pkg: github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/replay
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkBookApply-4         	18025047	       129.5 ns/op	   7720775 events/s
+BenchmarkReplayFromStore-4   	      48	  49119247 ns/op	   2035863 events/s
+PASS
+ok  	github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/replay	7.127s
+goos: linux
+goarch: amd64
+pkg: github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/event
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkEncode-4   	100000000	        22.88 ns/op
+BenchmarkDecode-4   	144162954	        16.43 ns/op
+PASS
+ok  	github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/event	6.369s

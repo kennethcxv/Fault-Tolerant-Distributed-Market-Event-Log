@@ -1,0 +1,12 @@
+n3-always-b1                 nodes=3          fsync=always producers=8   batch=1     events/s=7468     p50=1.039974ms p90=1.451953ms p99=1.875453ms p99.9=2.577203ms max=9.871895ms
+n3-always-b10                nodes=3          fsync=always producers=8   batch=10    events/s=57790    p50=1.287486ms p90=1.778501ms p99=3.131598ms p99.9=16.01442ms max=18.07735ms
+n3-always-b100               nodes=3          fsync=always producers=8   batch=100   events/s=214913   p50=2.370592ms p90=7.619408ms p99=19.505652ms p99.9=26.361028ms max=29.245628ms
+n3-always-b1000              nodes=3          fsync=always producers=8   batch=1000  events/s=263953   p50=25.676243ms p90=49.52738ms p99=138.807501ms p99.9=142.388554ms max=142.388554ms
+n5-always-b1                 nodes=5          fsync=always producers=8   batch=1     events/s=5429     p50=1.410391ms p90=2.008751ms p99=2.921122ms p99.9=4.162838ms max=9.84884ms
+n5-always-b10                nodes=5          fsync=always producers=8   batch=10    events/s=43441    p50=1.686417ms p90=2.371993ms p99=6.672163ms p99.9=16.555001ms max=24.568045ms
+n5-always-b100               nodes=5          fsync=always producers=8   batch=100   events/s=129470   p50=3.540562ms p90=14.055882ms p99=33.414277ms p99.9=49.884691ms max=50.066175ms
+n5-always-b1000              nodes=5          fsync=always producers=8   batch=1000  events/s=147415   p50=43.050395ms p90=89.928749ms p99=210.332567ms p99.9=234.529691ms max=234.529691ms
+n3-always-b100-p1            nodes=3          fsync=always producers=1   batch=100   events/s=111250   p50=695.804µs p90=1.035034ms p99=6.540069ms p99.9=13.163636ms max=14.720099ms
+n3-always-b100-p4            nodes=3          fsync=always producers=4   batch=100   events/s=177394   p50=1.435411ms p90=4.181011ms p99=13.869392ms p99.9=19.405865ms max=21.855916ms
+n3-always-b100-p16           nodes=3          fsync=always producers=16  batch=100   events/s=234053   p50=4.900116ms p90=12.489607ms p99=28.720341ms p99.9=32.384146ms max=32.559445ms
+n3-always-b100-p64           nodes=3          fsync=always producers=64  batch=100   events/s=269248   p50=20.866092ms p90=33.738074ms p99=43.588043ms p99.9=47.596042ms max=48.020319ms

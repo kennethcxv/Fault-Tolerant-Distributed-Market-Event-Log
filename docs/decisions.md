@@ -221,3 +221,35 @@ that looks like: a harness bug bootstrapped nodes with peer sets {1}, {1,2}
 and {1,2,3}, and raft panicked when the leader decided a follower needed a
 snapshot that didn't exist. etcd guards against the same mistake with a
 cluster ID.
+
+## D16. The leader sends before persisting
+
+Added in milestone 10. The Raft thesis (§10.2.1) describes this, etcd does it,
+and the library's README allows it. In etcd-io/raft v3.7 the leader's own
+append is acknowledged through a message to itself, which is delivered only in
+`Advance`, after persistence. Committing therefore still needs a durable
+majority. Readies that change term or vote still persist first.
+
+It helps only when nodes have separate disks. On one Mac SSD, flushes are
+serialized at the device, and the change made no measurable difference. On
+Linux runners it was part of a 6–21% gain (docs/benchmarks.md §7).
+
+The simulator could not test this ordering at first, because crashes only
+happened between steps. A mutation that let every node send first passed all
+tests. `CrashAtSendRate` now cuts power at the moment a node sends, and the
+same mutation fails.
+
+## D17. Reads during a snapshot install are retried, not judged
+
+Added after code review. A large snapshot installs in several Pebble batches.
+Readers on other goroutines check a generation counter that installs bump at
+start and end (a seqlock). A read that overlaps an install returns
+`unavailable` and the client retries. The alternatives were:
+
+- Making reads wait on a lock for the whole install. Rejected because installs
+  take seconds.
+- Installing into a staging keyspace and swapping. Rejected for now as more
+  code. It would also keep the node readable during the install.
+
+Before this, a follower serving reads during an install treated the
+half-written state as corruption and stopped itself.

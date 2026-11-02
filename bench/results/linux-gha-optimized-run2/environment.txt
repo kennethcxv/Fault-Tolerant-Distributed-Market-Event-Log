@@ -1,0 +1,7 @@
+Linux 7.0.0-1017-azure x86_64
+4
+CPU(s):                                  4
+Model name:                              AMD EPYC 9V45 96-Core Processor
+Filesystem     Type  Size  Used Avail Use% Mounted on
+/dev/root      ext4  145G   61G   84G  42% /
+go version go1.27.3 linux/amd64

@@ -1,0 +1,5 @@
+date: 2026-11-02T14:38:42Z
+commit: 2acd639 (binaries from bin)
+go: go version go1.27.3 linux/amd64
+os: Linux 7.0.0-1017-azure x86_64
+4
