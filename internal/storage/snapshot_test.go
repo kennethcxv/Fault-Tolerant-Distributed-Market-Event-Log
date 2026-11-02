@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"errors"
+	"io"
 	"math/rand/v2"
 	"testing"
 
@@ -142,5 +143,73 @@ func TestCrashDuringInstallIsRecoveredByReinstalling(t *testing.T) {
 			t.Fatalf("crash after batch %d: reinstalled state differs", crashAfter)
 		}
 		after.Close()
+	}
+}
+
+// Reads on other goroutines while a snapshot is installed in several batches
+// must see either a consistent state or ErrUnavailable, never ErrCorrupt:
+// a half-installed keyspace looks exactly like missing records. Found in
+// review; before the fix a follower serving reads failed itself as corrupt.
+func TestReadsDuringInstallAreNeverCorrupt(t *testing.T) {
+	src := openMem(t)
+	fill(t, src, 3000, 77)
+	stream := stateBytes(t, src)
+	dst := openMem(t)
+	fill(t, dst, 1000, 5)
+	defer SetInstallHookForTest(2<<10, nil)()
+
+	stop := make(chan struct{})
+	errs := make(chan error, 1)
+	unavailable := 0
+	go func() {
+		defer close(errs)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			// A reader's upTo comes from the state machine's published last
+			// offset, which is stale during the install.
+			_, _, err := dst.ReadRaw(1, 1000, 1000, 1<<30)
+			if errors.Is(err, ErrUnavailable) {
+				unavailable++
+				continue
+			}
+			if err != nil {
+				errs <- err
+				return
+			}
+		}
+	}()
+	for i := 0; i < 20; i++ {
+		if err := dst.ReceiveSnapshot(bytes.NewReader(stream), 77); err != nil {
+			t.Fatal(err)
+		}
+		if err := dst.InstallSnapshot(77); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(stop)
+	if err := <-errs; err != nil {
+		t.Fatalf("reader saw %v during an install", err)
+	}
+	t.Logf("%d reads overlapped an install and were told to retry", unavailable)
+}
+
+// A record that rotted on the leader's disk must not be shipped (G5).
+func TestSnapshotRefusesToStreamCorruptRecords(t *testing.T) {
+	src := openMem(t)
+	fill(t, src, 100, 10)
+	if err := CorruptForTest(src, 50); err != nil {
+		t.Fatal(err)
+	}
+	ss, err := src.SnapshotStateMachine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ss.Close()
+	if _, err := ss.WriteTo(io.Discard); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("streamed a corrupt record: %v", err)
 	}
 }

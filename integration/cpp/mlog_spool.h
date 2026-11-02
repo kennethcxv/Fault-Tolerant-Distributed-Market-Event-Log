@@ -16,6 +16,7 @@
 // Header-only, C++17, POSIX. No dependencies.
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -116,22 +117,32 @@ class SpoolWriter {
   }
 
   // flush writes the buffered records and returns how many were lost (0 on
-  // success). On a failed or partial write the file is cut back to its last
-  // good size, so it never holds a torn record before later ones, and the
-  // lost records' sequence numbers are reused.
+  // success). If a write fails partway (disk full), records that were
+  // written completely stay: a reader tailing the file may already have
+  // published them, so their sequence numbers must never be reused. Only the
+  // torn final record is cut off, and only the records not written count as
+  // lost. The file therefore never holds a torn record before later ones.
   uint64_t flush() {
     uint64_t n = pending_;
     pending_ = 0;
     if (n == 0) return 0;
-    bool ok = write_all(buf_.data(), buf_.size());
-    if (ok) {
-      size_ += off_t(buf_.size());
-      next_seq_ += n;
-    } else if (::ftruncate(fd_, size_) != 0 || ::lseek(fd_, size_, SEEK_SET) < 0) {
+    size_t written = 0;
+    bool ok = write_all(buf_.data(), buf_.size(), &written);
+    size_t keep = 0;
+    uint64_t kept = 0;
+    while (kept < n) {
+      size_t len = kHeaderSize + detail::get_u32(&buf_[keep + 4]) + kTrailerSize;
+      if (keep + len > written) break;
+      keep += len;
+      kept++;
+    }
+    size_ += off_t(keep);
+    next_seq_ += kept;
+    if (!ok && (::ftruncate(fd_, size_) != 0 || ::lseek(fd_, size_, SEEK_SET) < 0)) {
       error_ = errno;  // cannot restore a clean tail: stop writing
     }
     buf_.clear();
-    return ok ? 0 : n;
+    return n - kept;
   }
 
   // sync makes everything flushed so far durable. The engine host's power
@@ -163,7 +174,8 @@ class SpoolWriter {
     if (::lseek(fd_, size_, SEEK_SET) < 0) error_ = errno;
   }
 
-  bool write_all(const uint8_t* p, size_t n) {
+  bool write_all(const uint8_t* p, size_t n, size_t* written) {
+    *written = 0;
     if (error_ != 0) return false;
     while (n > 0) {
       ssize_t w = ::write(fd_, p, n);
@@ -173,6 +185,7 @@ class SpoolWriter {
       }
       p += w;
       n -= size_t(w);
+      *written += size_t(w);
     }
     return true;
   }
@@ -269,20 +282,25 @@ class AsyncSpool {
         const Slot& s = slots_[t & (Capacity - 1)];
         writer_.append(s.schema, s.type, s.source_ts, s.payload, s.len);
       }
-      uint64_t batch = (gap > 0) + (head - tail);
+      uint64_t events = head - tail;
+      uint64_t batch = (gap > 0) + events;
       // Free the slots before the write: the data is already copied out.
       tail_.store(head, std::memory_order_release);
       if (batch > 0) {
-        if (uint64_t lost = writer_.flush(); lost == 0) {
-          written_.fetch_add(batch, std::memory_order_relaxed);
-          gaps_.fetch_add(gap > 0, std::memory_order_relaxed);
+        uint64_t lost = writer_.flush();
+        uint64_t kept = batch - lost;
+        written_.fetch_add(kept, std::memory_order_relaxed);
+        if (gap > 0 && kept > 0) {  // the GAP record is first in the batch
+          gaps_.fetch_add(1, std::memory_order_relaxed);
           reported_drops = drops;
-          if (fsync_) writer_.sync();
-        } else {
-          // Every event in the batch is lost; the next GAP reports them along
-          // with the drops this batch was meant to report.
+        }
+        if (lost > 0) {
+          // Lost events are reported by the next GAP record, along with any
+          // drops a lost GAP record was meant to report.
           write_errors_.fetch_add(1, std::memory_order_relaxed);
-          dropped_.fetch_add(head - tail, std::memory_order_relaxed);
+          dropped_.fetch_add(std::min(lost, events), std::memory_order_relaxed);
+        } else if (fsync_) {
+          writer_.sync();
         }
       }
       if (stopping && head == head_.load(std::memory_order_acquire)) return;

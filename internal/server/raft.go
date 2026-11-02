@@ -41,7 +41,12 @@ type raftEngine struct {
 	// be delivered to a new request.
 	nextID      uint64
 	waiters     map[uint64]waiter
-	readWaiters map[uint64]chan error
+	readWaiters map[uint64]readWaiter
+}
+
+type readWaiter struct {
+	done     chan error
+	deadline time.Time
 }
 
 // peerReport tells the run loop that a peer was unreachable or that a
@@ -80,7 +85,7 @@ func newRaftEngine(id uint64, rep *replica.Replica, peers map[uint64]string, tic
 		stopped:     make(chan struct{}),
 		nextID:      binary.LittleEndian.Uint64(seed[:]),
 		waiters:     map[uint64]waiter{},
-		readWaiters: map[uint64]chan error{},
+		readWaiters: map[uint64]readWaiter{},
 	}
 	e.tr = newTransport(id, peers, log, f, func(peer uint64) {
 		select {
@@ -113,8 +118,16 @@ func (e *raftEngine) run(ctx context.Context) (err error) {
 			return nil
 		case <-ticker.C:
 			e.rep.Tick()
-			if ticks++; ticks%10 == 0 && e.rep.IsLeader() {
-				e.m.observeProgress(e.rep)
+			if ticks++; ticks%10 == 0 {
+				if e.rep.IsLeader() {
+					e.m.observeProgress(e.rep)
+				}
+				now := time.Now()
+				for id, w := range e.readWaiters {
+					if now.After(w.deadline) {
+						delete(e.readWaiters, id)
+					}
+				}
 			}
 		case msgs := <-e.inbound:
 			for _, m := range msgs {
@@ -187,8 +200,8 @@ func (e *raftEngine) processReady(ctx context.Context) error {
 		}
 		for _, rctx := range out.Reads {
 			id := binary.LittleEndian.Uint64(rctx)
-			if ch, ok := e.readWaiters[id]; ok {
-				ch <- nil
+			if w, ok := e.readWaiters[id]; ok {
+				w.done <- nil
 				delete(e.readWaiters, id)
 			}
 		}
@@ -236,8 +249,8 @@ func (e *raftEngine) onRoleChange(s raft.SoftState) {
 	if s.RaftState != raft.StateLeader {
 		e.failWaiters(&api.Error{Code: api.CodeOutcomeUnknown, Message: "leadership changed while the command was pending; retry with the same sequence numbers"})
 	}
-	for id, ch := range e.readWaiters {
-		ch <- &api.Error{Code: api.CodeNoLeader, Message: "leadership changed during a linearizable read; retry"}
+	for id, w := range e.readWaiters {
+		w.done <- &api.Error{Code: api.CodeNoLeader, Message: "leadership changed during a linearizable read; retry"}
 		delete(e.readWaiters, id)
 	}
 	e.rep.DropPendingReads()
@@ -281,7 +294,9 @@ func (e *raftEngine) readIndex(done chan error) {
 		return
 	}
 	e.nextID++
-	e.readWaiters[e.nextID] = done
+	// The caller gives up after its request timeout; the deadline lets the
+	// loop forget reads raft never answers (dropped while no leader).
+	e.readWaiters[e.nextID] = readWaiter{done: done, deadline: time.Now().Add(time.Minute)}
 	e.rep.ReadIndex(binary.LittleEndian.AppendUint64(nil, e.nextID))
 }
 

@@ -358,3 +358,42 @@ Findings:
   Milestone 10 measures how batch size affects this.
 - The demo script compared Prometheus's `1e+06` against `1000000` as strings
   and waited forever.
+
+## 2026-11-02 — Independent review findings and fixes
+
+A review agent with no prior context read the core packages and the raft
+library source. It found no lost acknowledged writes and no divergence, and it
+independently confirmed the leader-sends-first safety argument. It did find
+these:
+
+1. **High: a healthy follower could fail-stop as "corrupt".** A snapshot
+   larger than one install batch (16 MiB) is installed in several batches,
+   and each one is visible to readers. An HTTP read during the install saw
+   the old records deleted and the new ones only partly written, reported
+   "offset N missing", and the node shut itself down. Fixed with a seqlock in
+   `Store`: installs bump a generation counter at start and end, and reads on
+   other goroutines that overlap an install return `ErrUnavailable` (HTTP
+   503 `unavailable`, retried by the client) instead of judging the data.
+   `TestReadsDuringInstallAreNeverCorrupt` fails without the fix ("offset 113
+   missing") and passes with it.
+2. **Medium: the C++ spool writer reused sequence numbers after a partial
+   write.** On a failed batch write it truncated the whole batch, including
+   records written completely, which a tailing publisher could already have
+   sent. It now keeps complete records, cuts only the torn one, and counts
+   only the unwritten records as lost. The test uses `RLIMIT_FSIZE` to force
+   a short write.
+3. **Lower:**
+   - concurrent receives for the same snapshot index shared one temp file;
+     temp names are now unique;
+   - snapshot sends had no timeout; they now have 10 minutes;
+   - snapshot files raft discarded lingered until restart; they are now
+     removed once they are at or below the applied index;
+   - timed-out linearizable reads left map entries behind; waiters now
+     expire.
+4. **G5 gap:** snapshot transfer didn't re-verify each record's CRC, so a
+   record that rotted on the leader's disk would have been shipped. The
+   sender now verifies every record it streams.
+   `TestSnapshotRefusesToStreamCorruptRecords` covers it.
+5. **D4 open question:** does WAL rotation keep the prefix property? Checked
+   in Pebble's source: `rotateWAL` closes, and so syncs, the old WAL before
+   creating the new one. Recorded in D4.

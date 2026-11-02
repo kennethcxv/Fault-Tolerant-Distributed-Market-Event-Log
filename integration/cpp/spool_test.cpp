@@ -2,9 +2,12 @@
 // of a torn tail, and GAP records when the ring overflows.
 #include "mlog_spool.h"
 
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+
+#include <sys/resource.h>
 
 #define CHECK(cond)                                                    \
   do {                                                                 \
@@ -42,6 +45,34 @@ int main(int argc, char** argv) {
   }
   {
     mlog::SpoolWriter w(path, 9);
+    CHECK(w.ok() && w.next_seq() == 4);
+  }
+
+  // A write that fails partway (file size limit standing in for a full disk)
+  // keeps the records written completely and cuts only the torn one, so no
+  // sequence number is ever reused for different content.
+  {
+    std::string pp = dir + "/partial.spool";
+    std::remove(pp.c_str());
+    mlog::SpoolWriter w(pp, 3);
+    CHECK(w.ok());
+    w.append(1, 1, 0, payload, 3);
+    CHECK(w.flush() == 0);  // record 1: 55 bytes
+    std::signal(SIGXFSZ, SIG_IGN);
+    struct rlimit old, lim;
+    getrlimit(RLIMIT_FSIZE, &old);
+    lim = old;
+    lim.rlim_cur = 55 + 55 + 30;  // room for record 2 and part of record 3
+    setrlimit(RLIMIT_FSIZE, &lim);
+    for (int i = 0; i < 4; i++) w.append(1, 1, i, payload, 3);
+    uint64_t lost = w.flush();
+    setrlimit(RLIMIT_FSIZE, &old);
+    CHECK(lost == 3 && w.next_seq() == 3);
+    w.append(1, 1, 9, payload, 3);
+    CHECK(w.flush() == 0 && w.next_seq() == 4);
+  }
+  {
+    mlog::SpoolWriter w(dir + "/partial.spool", 3);  // reopen: 3 intact records
     CHECK(w.ok() && w.next_seq() == 4);
   }
 

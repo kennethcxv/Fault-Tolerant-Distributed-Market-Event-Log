@@ -391,6 +391,9 @@ func (r *Replica) maybeSnapshot() (uint64, error) {
 			return 0, err
 		}
 	}
+	// Received snapshots at or below the applied index can never be
+	// installed (raft rejects them), e.g. ones raft fast-forwarded past.
+	r.store.RemoveSnapshotFiles(r.fsm.Applied())
 	return r.applied, nil
 }
 

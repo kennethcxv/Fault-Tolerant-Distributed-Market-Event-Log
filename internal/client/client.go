@@ -253,7 +253,7 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 			return err
 		}
 		var apiErr *api.Error
-		if errors.As(lastErr, &apiErr) && apiErr.Code != api.CodeNoLeader && apiErr.Code != api.CodeTimeout {
+		if errors.As(lastErr, &apiErr) && apiErr.Code != api.CodeNoLeader && apiErr.Code != api.CodeTimeout && apiErr.Code != api.CodeUnavailable {
 			return lastErr
 		}
 		select {

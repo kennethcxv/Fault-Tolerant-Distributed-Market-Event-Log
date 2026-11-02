@@ -43,6 +43,7 @@ const (
 	CodeCorrupt        = "corrupt_data"
 	CodeNodeFailed     = "node_failed"
 	CodeTimeout        = "timeout"
+	CodeUnavailable    = "unavailable" // e.g. a snapshot install is replacing state; retry
 )
 
 type Error struct {

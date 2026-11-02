@@ -11,6 +11,8 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/vfs"
+
+	"github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/event"
 )
 
 // A state-machine snapshot is the whole state machine keyspace streamed from
@@ -87,6 +89,17 @@ func (ss *StateSnapshot) WriteTo(w io.Writer) (int64, error) {
 		if err != nil {
 			return written, err
 		}
+		// Never ship a damaged record to a follower (G5): the stream CRC
+		// only protects the transfer, not data that rotted on this disk.
+		if k := it.Key(); k[0] == 'e' {
+			e, n, err := event.Decode(v)
+			if err == nil && (n != len(v) || e.Offset != binary.BigEndian.Uint64(k[1:])) {
+				err = errors.New("record does not match its key")
+			}
+			if err != nil {
+				return written, fmt.Errorf("%w: offset %d: %w", ErrCorrupt, binary.BigEndian.Uint64(k[1:]), err)
+			}
+		}
 		hdr = binary.BigEndian.AppendUint32(hdr[:0], uint32(len(it.Key())))
 		if err := errors.Join(put(hdr), put(it.Key())); err != nil {
 			return written, err
@@ -124,7 +137,9 @@ func (s *Store) ReceiveSnapshot(r io.Reader, index uint64) error {
 		return err
 	}
 	final := s.snapPath(index)
-	tmp := final + ".tmp"
+	// Unique per receive: two streams for the same index (a new leader and a
+	// draining old one) must not write the same file.
+	tmp := fmt.Sprintf("%s.%d.tmp", final, s.tmpSeq.Add(1))
 	f, err := s.fs.Create(tmp, vfs.WriteCategoryUnspecified)
 	if err != nil {
 		return err
@@ -159,6 +174,8 @@ func (s *Store) HasSnapshotFile(index uint64) bool {
 // InstallSnapshot replaces the state machine with the received snapshot for
 // index, then deletes every snapshot file. Safe to repeat after a crash.
 func (s *Store) InstallSnapshot(index uint64) error {
+	s.installGen.Add(1)
+	defer s.installGen.Add(1)
 	path := s.snapPath(index)
 	if err := s.verifySnapshotFile(path, index); err != nil {
 		return fmt.Errorf("storage: install snapshot %d: %w", index, err)

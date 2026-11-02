@@ -56,7 +56,7 @@ type transport struct {
 	id          uint64
 	cluster     string
 	hc          *http.Client
-	snapClient  *http.Client // no overall timeout: snapshots can be large
+	snapClient  *http.Client
 	log         *slog.Logger
 	peers       map[uint64]*peerSender
 	unreachable func(id uint64)
@@ -72,8 +72,10 @@ type peerSender struct {
 func newTransport(id uint64, peers map[uint64]string, log *slog.Logger, f *faults, unreachable func(uint64)) *transport {
 	t := &transport{
 		id: id, cluster: clusterID(peers), log: log, faults: f, unreachable: unreachable,
-		hc:         &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{MaxIdleConnsPerHost: 4}},
-		snapClient: &http.Client{},
+		hc: &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{MaxIdleConnsPerHost: 4}},
+		// Generous, but finite: a stalled receiver must not pin the leader's
+		// Pebble snapshot and keep the follower in snapshot state forever.
+		snapClient: &http.Client{Timeout: 10 * time.Minute},
 		peers:      map[uint64]*peerSender{},
 	}
 	for pid, url := range peers {

@@ -150,7 +150,7 @@ var backlogDesc = prometheus.NewDesc("mlog_consumer_backlog_events",
 func (c consumerBacklog) Describe(ch chan<- *prometheus.Desc) { ch <- backlogDesc }
 
 func (c consumerBacklog) Collect(ch chan<- prometheus.Metric) {
-	consumers, err := c.st.LoadConsumers()
+	consumers, err := c.st.ListConsumers()
 	if err != nil {
 		return
 	}

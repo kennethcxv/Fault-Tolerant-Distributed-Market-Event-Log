@@ -66,6 +66,13 @@ one fsync per Ready.
 This depends on Pebble writing a single WAL and recovering a prefix of it.
 WAL failover must stay disabled.
 
+WAL rotation doesn't break the prefix property. I checked Pebble v2.1.7's
+source: `DB.rotateWAL` closes the previous log before creating the next one,
+and `LogWriter.Close` fsyncs it. Pebble's comment says this ordering is
+deliberate, so that Open never sees two logs with unclean tails. So a
+batch in a newer WAL can only become durable after everything in older WALs
+already is.
+
 Raft-log compaction is safe for the same reason. The compaction batch enters
 the WAL after the state-machine batches for the entries it deletes, so it can
 only survive a crash if they do. The design first fsynced the compaction batch

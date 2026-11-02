@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"sync/atomic"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/vfs"
@@ -35,6 +36,9 @@ var (
 	// ErrCorrupt means stored data failed verification. The node must stop
 	// serving rather than return it.
 	ErrCorrupt = errors.New("storage: corrupt data")
+	// ErrUnavailable means a snapshot install overlapped the read; the state
+	// machine was being replaced, so the result was discarded. Retry.
+	ErrUnavailable = errors.New("storage: snapshot install in progress")
 )
 
 var (
@@ -61,6 +65,26 @@ type Store struct {
 	fs  vfs.FS
 	dir string
 	log *slog.Logger
+	// installGen is odd while InstallSnapshot is replacing the state machine
+	// in several batches. Readers on other goroutines check it before and
+	// after reading (a seqlock), so a half-installed state is never mistaken
+	// for corruption or served.
+	installGen atomic.Uint64
+	tmpSeq     atomic.Uint64
+}
+
+// stable runs read and returns ErrUnavailable if a snapshot install was in
+// progress at any point during it.
+func (s *Store) stable(read func() error) error {
+	gen := s.installGen.Load()
+	if gen%2 == 1 {
+		return ErrUnavailable
+	}
+	err := read()
+	if s.installGen.Load() != gen {
+		return ErrUnavailable
+	}
+	return err
 }
 
 func Open(o Options) (*Store, error) {
@@ -141,6 +165,15 @@ func (s *Store) LoadProducers() (map[uint64]Producer, error) {
 	return out, err
 }
 
+// ListConsumers is LoadConsumers for other goroutines (HTTP, metrics).
+func (s *Store) ListConsumers() (out map[string]uint64, err error) {
+	err = s.stable(func() error {
+		out, err = s.LoadConsumers()
+		return err
+	})
+	return out, err
+}
+
 func (s *Store) LoadConsumers() (map[string]uint64, error) {
 	out := map[string]uint64{}
 	err := s.scanPrefix(prefixConsumer, func(k, v []byte) error {
@@ -154,24 +187,32 @@ func (s *Store) LoadConsumers() (map[string]uint64, error) {
 }
 
 // GetProducer reads one producer's committed position. Safe for concurrent use.
-func (s *Store) GetProducer(id uint64) (Producer, error) {
-	v, err := s.get(binary.BigEndian.AppendUint64(append([]byte(nil), prefixProducer...), id))
-	if err != nil {
-		return Producer{}, err
-	}
-	if len(v) != 16 {
-		return Producer{}, fmt.Errorf("%w: producer %d", ErrCorrupt, id)
-	}
-	return Producer{LastSeq: binary.BigEndian.Uint64(v), LastOffset: binary.BigEndian.Uint64(v[8:])}, nil
+func (s *Store) GetProducer(id uint64) (p Producer, err error) {
+	err = s.stable(func() error {
+		v, err := s.get(binary.BigEndian.AppendUint64(append([]byte(nil), prefixProducer...), id))
+		if err != nil {
+			return err
+		}
+		if len(v) != 16 {
+			return fmt.Errorf("%w: producer %d", ErrCorrupt, id)
+		}
+		p = Producer{LastSeq: binary.BigEndian.Uint64(v), LastOffset: binary.BigEndian.Uint64(v[8:])}
+		return nil
+	})
+	return p, err
 }
 
 // GetConsumer reads one consumer's committed checkpoint. Safe for concurrent use.
-func (s *Store) GetConsumer(name string) (uint64, error) {
+func (s *Store) GetConsumer(name string) (off uint64, err error) {
 	key := append(append([]byte(nil), prefixConsumer...), name...)
-	if _, err := s.get(key); err != nil {
-		return 0, err
-	}
-	return s.getUint64(key)
+	err = s.stable(func() error {
+		if _, err := s.get(key); err != nil {
+			return err
+		}
+		off, err = s.getUint64(key)
+		return err
+	})
+	return off, err
 }
 
 // ReadRaw returns verified records from..upTo (inclusive), back to back,
@@ -179,7 +220,18 @@ func (s *Store) GetConsumer(name string) (uint64, error) {
 // least one record if any are in range). upTo must be an offset the caller
 // knows was applied; a record missing below it, a misplaced record or a
 // checksum failure is ErrCorrupt and nothing past it is returned.
-func (s *Store) ReadRaw(from, upTo uint64, maxEvents, maxBytes int) ([]byte, int, error) {
+func (s *Store) ReadRaw(from, upTo uint64, maxEvents, maxBytes int) (raw []byte, n int, err error) {
+	err = s.stable(func() error {
+		raw, n, err = s.readRaw(from, upTo, maxEvents, maxBytes)
+		return err
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	return raw, n, nil
+}
+
+func (s *Store) readRaw(from, upTo uint64, maxEvents, maxBytes int) ([]byte, int, error) {
 	if from == 0 {
 		from = 1
 	}

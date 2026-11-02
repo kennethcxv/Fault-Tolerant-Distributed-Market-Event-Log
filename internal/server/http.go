@@ -257,7 +257,7 @@ func (n *Node) handleConsumer(w http.ResponseWriter, r *http.Request) {
 
 // handleConsumers lists every consumer's checkpoint and backlog on this node.
 func (n *Node) handleConsumers(w http.ResponseWriter, r *http.Request) {
-	consumers, err := n.store.LoadConsumers()
+	consumers, err := n.store.ListConsumers()
 	if err != nil {
 		n.storageError(w, err)
 		return
@@ -316,6 +316,10 @@ func (n *Node) barrier(w http.ResponseWriter, r *http.Request) bool {
 // storageError fails the node on corruption: serving anything else from a
 // store that returned bad data would risk handing out wrong records.
 func (n *Node) storageError(w http.ResponseWriter, err error) {
+	if errors.Is(err, storage.ErrUnavailable) {
+		writeError(w, &api.Error{Code: api.CodeUnavailable, Message: err.Error()})
+		return
+	}
 	if errors.Is(err, storage.ErrCorrupt) || errors.Is(err, event.ErrCorrupt) {
 		n.fail(err)
 		writeError(w, &api.Error{Code: api.CodeCorrupt, Message: err.Error()})
@@ -345,6 +349,7 @@ var errorStatus = map[string]int{
 	api.CodeNoLeader:       http.StatusServiceUnavailable,
 	api.CodeOverloaded:     http.StatusServiceUnavailable,
 	api.CodeNodeFailed:     http.StatusServiceUnavailable,
+	api.CodeUnavailable:    http.StatusServiceUnavailable,
 	api.CodeOutcomeUnknown: http.StatusGatewayTimeout,
 	api.CodeTimeout:        http.StatusGatewayTimeout,
 	api.CodeInvalid:        http.StatusBadRequest,
