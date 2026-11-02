@@ -34,8 +34,13 @@ type Config struct {
 	HeartbeatTick int
 	// Sync fsyncs Raft state before messages are sent. false voids durability
 	// and exists only to measure what fsync costs.
-	Sync   bool
-	Logger *slog.Logger
+	Sync bool
+	// SnapshotEntries: take a snapshot and compact the log every this many
+	// applied entries (0 disables). CompactKeep entries are kept behind each
+	// snapshot so briefly lagging followers can catch up without one.
+	SnapshotEntries uint64
+	CompactKeep     uint64
+	Logger          *slog.Logger
 }
 
 // Output is what one Ready produced for the caller.
@@ -56,6 +61,10 @@ type Output struct {
 	PersistTime time.Duration
 	Synced      bool
 	ApplyTime   time.Duration
+	// SnapshotInstalled and SnapshotCreated are the indexes of a snapshot
+	// installed from the leader or taken locally during this Ready, or 0.
+	SnapshotInstalled uint64
+	SnapshotCreated   uint64
 }
 
 type Replica struct {
@@ -67,6 +76,9 @@ type Replica struct {
 	fsm   *fsm.FSM
 	soft  raft.SoftState
 	reads []raft.ReadState
+	// applied is the last index raft handed us (entries or snapshot). The
+	// state machine's own applied index never lags it after Ready returns.
+	applied uint64
 }
 
 // memStorage serves the log from memory but reports the ConfState saved with
@@ -117,6 +129,17 @@ func Open(cfg Config, st *storage.Store, f *fsm.FSM) (*Replica, error) {
 		return nil, fmt.Errorf("%w: raft hard state commits index %d but the log ends at %d; "+
 			"this node's disk lost acknowledged data and the node must be replaced", storage.ErrCorrupt, commit, lastIndex)
 	}
+	// A received snapshot whose install was interrupted by a crash: raft
+	// already considers it applied, so finish it from the retained file.
+	if snapIndex > f.Applied() {
+		if err := st.InstallSnapshot(snapIndex); err != nil {
+			return nil, fmt.Errorf("replica: finish installing snapshot %d: %w", snapIndex, err)
+		}
+		if err := f.Reload(); err != nil {
+			return nil, err
+		}
+	}
+	st.RemoveSnapshotFiles(^uint64(0))
 	fresh := raft.IsEmptyHardState(rs.HardState) && len(rs.Entries) == 0 && snapIndex == 0
 	if fresh && f.Applied() > 0 {
 		return nil, errors.New("replica: state machine has data but the raft log is empty; was this directory used in standalone mode?")
@@ -154,7 +177,7 @@ func Open(cfg Config, st *storage.Store, f *fsm.FSM) (*Replica, error) {
 			return nil, err
 		}
 	}
-	r := &Replica{cfg: cfg, log: log, rn: rn, ms: ms, store: st, fsm: f}
+	r := &Replica{cfg: cfg, log: log, rn: rn, ms: ms, store: st, fsm: f, applied: applied}
 	r.soft = rn.BasicStatus().SoftState
 	log.Info("replica opened", "fresh", fresh, "applied", f.Applied(), "commit", rs.HardState.GetCommit(),
 		"term", rs.HardState.GetTerm(), "snapshot", snapIndex, "log_entries", len(rs.Entries))
@@ -211,12 +234,18 @@ func (r *Replica) Ready() (Output, error) {
 
 	start = time.Now()
 	if !raft.IsEmptySnap(rd.Snapshot) {
-		return out, errors.New("replica: snapshot install is not implemented")
+		if err := r.installSnapshot(rd.Snapshot); err != nil {
+			return out, err
+		}
+		out.SnapshotInstalled = r.applied
 	}
 	if out.Results, err = r.apply(rd.CommittedEntries); err != nil {
 		return out, fmt.Errorf("replica: apply: %w", err)
 	}
 	out.ApplyTime = time.Since(start)
+	if out.SnapshotCreated, err = r.maybeSnapshot(); err != nil {
+		return out, fmt.Errorf("replica: snapshot: %w", err)
+	}
 
 	r.reads = append(r.reads, rd.ReadStates...)
 	applied := r.fsm.Applied()
@@ -292,7 +321,81 @@ func (r *Replica) apply(ents []*raftpb.Entry) ([]fsm.Result, error) {
 		}
 		cs = r.rn.ApplyConfChange(cc)
 	}
-	return r.fsm.Apply(ents, cs, false)
+	res, err := r.fsm.Apply(ents, cs, false)
+	if err == nil {
+		r.applied = ents[len(ents)-1].GetIndex()
+	}
+	return res, err
+}
+
+// installSnapshot replaces the state machine with the snapshot received for
+// snap's index. The leader sends metadata matching the streamed state
+// exactly (PrepareSnapshot), so afterwards raft and the state machine agree.
+func (r *Replica) installSnapshot(snap *raftpb.Snapshot) error {
+	index := snap.GetMetadata().GetIndex()
+	if err := r.store.InstallSnapshot(index); err != nil {
+		return fmt.Errorf("replica: install snapshot %d: %w", index, err)
+	}
+	if err := r.fsm.Reload(); err != nil {
+		return err
+	}
+	if got := r.fsm.Applied(); got != index {
+		return fmt.Errorf("%w: snapshot %d installed state at applied index %d", storage.ErrCorrupt, index, got)
+	}
+	r.applied = index
+	r.log.Info("installed snapshot", "index", index, "last_offset", r.fsm.LastOffset())
+	return nil
+}
+
+// maybeSnapshot records a snapshot at the applied index every
+// SnapshotEntries entries and compacts the log behind it. The snapshot's
+// data is the state machine itself, so only metadata is stored here.
+func (r *Replica) maybeSnapshot() (uint64, error) {
+	if r.cfg.SnapshotEntries == 0 || r.applied < r.SnapshotIndex()+r.cfg.SnapshotEntries || r.fsm.Applied() != r.applied {
+		return 0, nil
+	}
+	snap, err := r.ms.CreateSnapshot(r.applied, r.fsm.ConfState(), nil)
+	if err != nil {
+		return 0, err
+	}
+	compact := uint64(0)
+	if first, _ := r.ms.FirstIndex(); r.applied > r.cfg.CompactKeep && r.applied-r.cfg.CompactKeep >= first {
+		compact = r.applied - r.cfg.CompactKeep
+	}
+	// WAL order makes this safe without an fsync; see SaveSnapshotAndCompact.
+	if err := r.store.SaveSnapshotAndCompact(snap, compact); err != nil {
+		return 0, err
+	}
+	if compact > 0 {
+		if err := r.ms.Compact(compact); err != nil {
+			return 0, err
+		}
+	}
+	return r.applied, nil
+}
+
+// PrepareSnapshot turns a MsgSnap raft wants to send into one describing the
+// state that will actually be streamed: a consistent view of the state
+// machine at its current applied index A, with A's term and membership.
+// Raft's own snapshot may be older than A; describing the streamed state
+// exactly keeps the follower's raft log and state machine at the same index.
+// Every entry up to A is committed, so this is a valid snapshot to send.
+// Must be called on the goroutine that drives the replica.
+func (r *Replica) PrepareSnapshot(m *raftpb.Message) (*raftpb.Message, *storage.StateSnapshot, error) {
+	ss, err := r.store.SnapshotStateMachine()
+	if err != nil {
+		return nil, nil, err
+	}
+	term, err := r.ms.Term(ss.Applied)
+	if err != nil {
+		ss.Close()
+		return nil, nil, fmt.Errorf("replica: term of applied index %d: %w", ss.Applied, err)
+	}
+	msg := proto.Clone(m).(*raftpb.Message)
+	msg.Snapshot = &raftpb.Snapshot{Metadata: &raftpb.SnapshotMetadata{
+		Index: new(ss.Applied), Term: new(term), ConfState: proto.Clone(r.fsm.ConfState()).(*raftpb.ConfState),
+	}}
+	return msg, ss, nil
 }
 
 type raftLogger struct{ l *slog.Logger }

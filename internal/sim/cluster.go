@@ -11,6 +11,7 @@
 package sim
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -35,14 +36,17 @@ type Options struct {
 	Nodes int
 	Seed  uint64
 	// Network faults, applied to every message independently.
-	DropRate  float64
-	DupRate   float64
-	MaxDelay  int // ticks; delays are uniform in [0, MaxDelay]
-	NoSync    bool
-	Logger    *slog.Logger
-	OnResult  func(node uint64, r fsm.Result)
-	OnRead    func(node uint64, rctx []byte)
-	OnRoleSet func(node uint64, s raft.SoftState)
+	DropRate float64
+	DupRate  float64
+	MaxDelay int // ticks; delays are uniform in [0, MaxDelay]
+	NoSync   bool
+	// SnapshotEntries and CompactKeep configure log compaction (0 = off).
+	SnapshotEntries uint64
+	CompactKeep     uint64
+	Logger          *slog.Logger
+	OnResult        func(node uint64, r fsm.Result)
+	OnRead          func(node uint64, rctx []byte)
+	OnRoleSet       func(node uint64, s raft.SoftState)
 }
 
 type Node struct {
@@ -57,9 +61,10 @@ func (n *Node) Replica() *replica.Replica { return n.rep }
 func (n *Node) Store() *storage.Store     { return n.store }
 
 type envelope struct {
-	at  int64
-	seq int // tie-breaker so delivery order is total
-	msg *raftpb.Message
+	at   int64
+	seq  int // tie-breaker so delivery order is total
+	msg  *raftpb.Message
+	snap []byte // state machine stream for MsgSnap
 }
 
 type Cluster struct {
@@ -71,13 +76,15 @@ type Cluster struct {
 	sent    int
 	blocked map[[2]uint64]bool // [from, to]
 	trace   []string
+	// Installs counts snapshots installed per node.
+	Installs map[uint64]int
 }
 
 func New(opts Options) (*Cluster, error) {
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	c := &Cluster{opts: opts, rng: rand.New(rand.NewPCG(opts.Seed, 0x51)), blocked: map[[2]uint64]bool{}}
+	c := &Cluster{opts: opts, rng: rand.New(rand.NewPCG(opts.Seed, 0x51)), blocked: map[[2]uint64]bool{}, Installs: map[uint64]int{}}
 	for id := uint64(1); id <= uint64(opts.Nodes); id++ {
 		c.Nodes = append(c.Nodes, &Node{ID: id, fs: vfs.NewCrashableMem()})
 	}
@@ -110,7 +117,8 @@ func (c *Cluster) open(n *Node) error {
 	}
 	rep, err := replica.Open(replica.Config{
 		ID: n.ID, Peers: c.peers(), ElectionTick: 10, HeartbeatTick: 1,
-		Sync: !c.opts.NoSync, Logger: c.opts.Logger.With("node", n.ID),
+		Sync: !c.opts.NoSync, SnapshotEntries: c.opts.SnapshotEntries, CompactKeep: c.opts.CompactKeep,
+		Logger: c.opts.Logger.With("node", n.ID),
 	}, st, f)
 	if err != nil {
 		st.Close()
@@ -154,10 +162,21 @@ func (c *Cluster) Step() error {
 	for _, e := range due {
 		to := c.Node(e.msg.GetTo())
 		if !to.Up || c.blocked[[2]uint64{e.msg.GetFrom(), e.msg.GetTo()}] {
+			c.snapshotDone(e, false)
 			continue
+		}
+		if e.snap != nil {
+			index := e.msg.GetSnapshot().GetMetadata().GetIndex()
+			if err := to.store.ReceiveSnapshot(bytes.NewReader(e.snap), index); err != nil {
+				c.Tracef("node %d: rejected snapshot %d: %v", to.ID, index, err)
+				c.snapshotDone(e, false)
+				continue
+			}
+			c.Tracef("node %d: received snapshot %d (%d bytes) from %d", to.ID, index, len(e.snap), e.msg.GetFrom())
 		}
 		// Step errors (stale or unknown peers) are expected under faults.
 		to.rep.Step(e.msg)
+		c.snapshotDone(e, true)
 	}
 	return c.processReady()
 }
@@ -175,8 +194,26 @@ func (c *Cluster) processReady() error {
 					c.opts.OnRoleSet(n.ID, *out.SoftState)
 				}
 			}
+			if out.SnapshotInstalled > 0 {
+				c.Installs[n.ID]++
+				c.Tracef("node %d: installed snapshot %d", n.ID, out.SnapshotInstalled)
+			}
 			for _, m := range out.Messages {
-				c.send(m)
+				if m.GetType() != raftpb.MsgSnap {
+					c.send(m, nil)
+					continue
+				}
+				msg, ss, err := n.rep.PrepareSnapshot(m)
+				if err != nil {
+					return fmt.Errorf("node %d: prepare snapshot: %w", n.ID, err)
+				}
+				var buf bytes.Buffer
+				_, err = ss.WriteTo(&buf)
+				ss.Close()
+				if err != nil {
+					return fmt.Errorf("node %d: stream snapshot: %w", n.ID, err)
+				}
+				c.send(msg, buf.Bytes())
 			}
 			for _, r := range out.Results {
 				if c.opts.OnResult != nil {
@@ -193,13 +230,14 @@ func (c *Cluster) processReady() error {
 	return nil
 }
 
-func (c *Cluster) send(m *raftpb.Message) {
+func (c *Cluster) send(m *raftpb.Message, snap []byte) {
 	copies := 1
 	if c.rng.Float64() < c.opts.DupRate {
 		copies = 2
 	}
 	for range copies {
 		if c.rng.Float64() < c.opts.DropRate {
+			c.snapshotDone(envelope{msg: m, snap: snap}, false)
 			continue
 		}
 		delay := int64(0)
@@ -208,7 +246,18 @@ func (c *Cluster) send(m *raftpb.Message) {
 		}
 		c.sent++
 		// Delivery is no earlier than the next tick, as with a real network.
-		c.net = append(c.net, envelope{at: c.Now + TickMillis + delay, seq: c.sent, msg: m})
+		c.net = append(c.net, envelope{at: c.Now + TickMillis + delay, seq: c.sent, msg: m, snap: snap})
+	}
+}
+
+// snapshotDone reports a snapshot's fate to its sender, as the real
+// transport does once the stream finishes or fails.
+func (c *Cluster) snapshotDone(e envelope, ok bool) {
+	if e.snap == nil {
+		return
+	}
+	if from := c.Node(e.msg.GetFrom()); from.Up {
+		from.rep.ReportSnapshot(e.msg.GetTo(), ok)
 	}
 }
 
@@ -298,6 +347,20 @@ func (c *Cluster) Crash(id uint64, unsyncedPercent int) {
 	n.fs, n.Up, n.rep, n.store = crashed, false, nil, nil
 	c.Tracef("crash node %d (unsynced kept %d%%)", id, unsyncedPercent)
 }
+
+// CrashTo stops a node with its disk replaced by an earlier crash clone of
+// it, for crashes that must happen at a specific point inside a call.
+func (c *Cluster) CrashTo(id uint64, disk *vfs.MemFS) {
+	n := c.Node(id)
+	if n.Up {
+		n.store.Close()
+	}
+	n.fs, n.Up, n.rep, n.store = disk, false, nil, nil
+	c.Tracef("crash node %d at a captured point", id)
+}
+
+// FS exposes a node's filesystem so tests can capture crash clones.
+func (n *Node) FS() *vfs.MemFS { return n.fs }
 
 // Restart reopens a crashed node from what its disk retained.
 func (c *Cluster) Restart(id uint64) error {
