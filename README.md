@@ -7,11 +7,12 @@ storage engine come from those libraries. This repository adds everything around
 storage layout, Raft integration, state machine, snapshot transfer, transport, fault-injection
 harness, and replay engine.
 
-**Status: milestones 1–6 of 10 done** (see [STATUS](docs/STATUS.md)). Nothing here is claimed to
+**Status: milestones 1–7 of 10 done** (see [STATUS](docs/STATUS.md)). Nothing here is claimed to
 work unless a test or benchmark in this repository shows it.
 
 - [Design: guarantees, failure model, architecture](docs/design.md)
 - [Decision log](docs/decisions.md)
+- [Testing: layers, scenarios, mutation checks](docs/testing.md)
 - [Engineering journal](docs/journal.md)
 
 ## Quick start
@@ -29,6 +30,10 @@ scripts/cluster.sh restart 1                  # it rejoins and catches up
 scripts/cluster.sh wipe
 ```
 
+Fault demonstrations: `scripts/demo-failover.sh` (SIGKILL the leader under load) and
+`scripts/demo-partition.sh` (isolate the leader; a write to it is refused while the majority
+continues).
+
 ## Milestones
 
 | # | Milestone | Done when |
@@ -39,7 +44,7 @@ scripts/cluster.sh wipe
 | 4 | Raft replication | ✔ simulator + HTTP cluster tests |
 | 5 | Durable restart and recovery | ✔ crash, power-loss, truncation tests |
 | 6 | Snapshots and log compaction | ✔ snapshot catch-up, crash mid-install |
-| 7 | Fault-injection harness | randomized runs pass I1–I7 and Porcupine |
+| 7 | Fault-injection harness | ✔ randomized simulator, multi-process e2e ([testing](docs/testing.md)) |
 | 8 | Consumer checkpoints, dedup | consumer restart reaches the same replay hash |
 | 9 | Project 1 integration | C++ spool writer → publisher → cluster, tested in CI |
 | 10 | Performance analysis, final docs | benchmarks with stated conditions |

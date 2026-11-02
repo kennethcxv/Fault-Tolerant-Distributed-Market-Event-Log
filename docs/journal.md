@@ -235,3 +235,55 @@ Findings:
   fsync removed broke no crash test. The comment had the reasoning wrong: WAL
   order alone guarantees the compaction can't outlive the batches it depends
   on. The fsync was removed and D4 was corrected.
+
+## 2026-11-02 — Milestone 7: fault-injection harness
+
+Done:
+
+- `sim.TestRandomizedFaults`: drops, duplicates, delays, symmetric and one-way
+  partitions, crashes with torn writes, and snapshots on 3- and 5-node
+  clusters, with I1–I7 checked on every seed. Across the default 30 seeds:
+  53 crashes, 99 partitions, 79 one-way blocks, 40 snapshot installs and 122
+  timed-out operations. 200 seeds passed.
+- Named scenario tests for:
+  - a minority leader, which accepted 5 proposals and acknowledged none;
+  - duplicated, delayed, gapped and overlapping client requests;
+  - a one-way partition.
+- `internal/e2e`: builds `mlogd`, runs three processes, and keeps three
+  producers and two linearizable readers busy through:
+  - SIGKILL of the leader;
+  - an isolated leader;
+  - SIGKILL of a follower.
+
+  Every run checks Porcupine, identical logs, identical replay hashes and
+  that every acknowledged write is present. Three consecutive `-race` runs
+  passed, each with about 1,050 events and 1,500 checked operations.
+- `mlogctl fault`, `load` and `leader`; `scripts/demo-failover.sh` and
+  `scripts/demo-partition.sh`.
+- `docs/testing.md`: scenario-to-test map, invariants, mutation checks.
+
+Findings:
+
+- Porcupine timed out on one of the first 30 randomized seeds (248
+  operations, 60 s). Timed-out appends with an unbounded return time make the
+  search explode. `BoundRetries` bounds each by the return of the retry that
+  settled it. That's sound because the dedup semantics leave the earlier
+  attempt either before that point or with no effect at all. Afterwards, 200
+  seeds checked in about 5 s.
+- Mutation checks showed the read path was effectively untested. With
+  ReadIndex reads answered before applying, the simulator still passed: its
+  reads went only to the leader, which applies before answering, and hit
+  random offsets far from the tail. Reads now go to random nodes, and half of
+  them target the newest offsets. The same mutation then fails Porcupine.
+- During the failover demo the leader was killed while batches were in
+  flight. The producers retried, and 100 events came back as `duplicate`
+  (committed, but the ack was lost). Final count: exactly 40,000, nothing
+  missing and nothing doubled.
+- The first replay of demo traffic showed 27,000 of 40,000 events rejected.
+  Every producer's generator numbered orders from 1, so the producers
+  collided on order IDs. Each producer now has its own ID range, and rejects
+  are back to the generator's intended ~2%.
+- `mlogctl load` failed when started right after the cluster: the
+  linearizable producer lookup returned `no_leader` and wasn't retried. The
+  client now retries transient read failures, and `cluster.sh start` waits
+  for a leader.

@@ -25,10 +25,12 @@ milestone.
 - M6 Snapshots and log compaction: periodic snapshot + compaction, state
   machine streaming, HTTP transfer, crash-safe install, simulator and HTTP
   tests, `--snapshot-entries`/`--snapshot-keep`.
+- M7 Fault-injection harness: randomized combined-fault simulator test,
+  named scenarios, multi-process e2e test with Porcupine, `mlogctl fault`,
+  `load`, `leader`, demo scripts, `docs/testing.md` (mutation checks).
 
 ## Remaining acceptance criteria
 
-- [ ] M7 Deterministic simulator, Porcupine checks, the eight required fault scenarios
 - [ ] M8 Consumer checkpoint/restart flow, dedup under duplicated requests
 - [ ] M9 C++ spool writer, publisher sidecar, CI build of the C++ side
 - [ ] M10 Benchmarks, metrics, multiprocess demo scripts, final docs, résumé bullets
@@ -45,8 +47,8 @@ None open.
 
 ## Next steps
 
-Start M7: a randomized simulator test that combines everything (drops,
-duplicates, delays, partitions, crashes, snapshots), many seeds, Porcupine
-on every run, and failure traces. Then the eight required scenarios as named
-tests, and a multiprocess e2e test that builds mlogd and injects faults over
-/debug/fault.
+Start M8: a consumer that replays from the cluster, keeps a local
+order-book checkpoint file, and commits its offset to the replicated consumer
+checkpoint. Restart test: kill the consumer at random points and check that
+the final hash equals an uninterrupted replay. Add a consumer-backlog
+section to `mlogctl status`.
