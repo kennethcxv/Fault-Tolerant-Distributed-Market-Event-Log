@@ -1,0 +1,3 @@
+producers=4 batch=20 events/producer=4000 elapsed=6.591s
+appended=15960 duplicates=40 requests=800 throughput=2421 events/s
+append latency p50=23.673333ms p90=34.937125ms p99=49.236333ms p99.9=2.309945875s max=2.309945875s

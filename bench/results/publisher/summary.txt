@@ -1,0 +1,4 @@
+batch=100 events=500000 drain_ms=51123 events_per_s=9780
+batch=500 events=500000 drain_ms=12028 events_per_s=41569
+batch=2000 events=500000 drain_ms=4487 events_per_s=111433
+batch=10000 events=500000 drain_ms=4083 events_per_s=122458

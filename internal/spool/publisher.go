@@ -29,7 +29,7 @@ type Publisher struct {
 	Client     *client.Client
 	Path       string
 	ProducerID uint64
-	Batch      int           // records per append (default 500)
+	Batch      int           // records per append (default 5000)
 	Linger     time.Duration // wait this long to fill a batch (default 2ms)
 	Poll       time.Duration // wait at the end of the spool (default 10ms)
 	Logger     *slog.Logger
@@ -41,7 +41,7 @@ type Publisher struct {
 }
 
 func (p *Publisher) Run(ctx context.Context) error {
-	p.Batch = cmp.Or(p.Batch, 500)
+	p.Batch = cmp.Or(p.Batch, 5000)
 	p.Linger = cmp.Or(p.Linger, 2*time.Millisecond)
 	p.Poll = cmp.Or(p.Poll, 10*time.Millisecond)
 	if p.Logger == nil {

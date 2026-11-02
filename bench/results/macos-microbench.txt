@@ -1,0 +1,30 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/fsm
+cpu: Apple M4 Max
+BenchmarkApply/sync=true/batch=1-16         	     573	   4213831 ns/op	       237.7 events/s
+BenchmarkApply/sync=true/batch=10-16        	     553	   4309423 ns/op	      2325 events/s
+BenchmarkApply/sync=true/batch=100-16       	     522	   4452149 ns/op	     22644 events/s
+BenchmarkApply/sync=true/batch=1000-16      	     432	   5482082 ns/op	    188235 events/s
+BenchmarkApply/sync=false/batch=1-16        	  904587	      2647 ns/op	    381908 events/s
+BenchmarkApply/sync=false/batch=10-16       	  161148	     15119 ns/op	    676921 events/s
+BenchmarkApply/sync=false/batch=100-16      	   18134	    132476 ns/op	    771545 events/s
+BenchmarkApply/sync=false/batch=1000-16     	    1597	   1488116 ns/op	    693796 events/s
+PASS
+ok  	github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/fsm	25.236s
+goos: darwin
+goarch: arm64
+pkg: github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/replay
+cpu: Apple M4 Max
+BenchmarkBookApply-16          	28148736	        81.02 ns/op	  12343094 events/s
+BenchmarkReplayFromStore-16    	     100	  20801475 ns/op	   4807359 events/s
+PASS
+ok  	github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/replay	4.548s
+goos: darwin
+goarch: arm64
+pkg: github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/event
+cpu: Apple M4 Max
+BenchmarkEncode-16    	258535114	         9.053 ns/op
+BenchmarkDecode-16    	293858164	         8.175 ns/op
+PASS
+ok  	github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/event	6.513s

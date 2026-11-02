@@ -1,0 +1,2 @@
+mode=log events=1000000 catch_up_ms=1880 snapshots_installed=0 follower_disk_kb=91484
+mode=snapshot events=1000000 catch_up_ms=1077 snapshots_installed=1 follower_disk_kb=71324

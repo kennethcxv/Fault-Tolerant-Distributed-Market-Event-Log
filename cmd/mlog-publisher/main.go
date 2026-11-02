@@ -25,7 +25,7 @@ func main() {
 	path := flag.String("spool", "", "spool file to publish (required)")
 	producer := flag.Uint64("producer", 0, "producer id written by the engine (required)")
 	endpoints := flag.String("endpoints", "127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003", "log nodes")
-	batch := flag.Int("batch", 500, "records per append")
+	batch := flag.Int("batch", 5000, "records per append (bench/publisher.sh: 500 drains at ~42k events/s, 2000+ at ~110k+ on a laptop 3-node cluster)")
 	metrics := flag.String("metrics-listen", "", "serve Prometheus metrics on this address (e.g. 127.0.0.1:9101)")
 	flag.Parse()
 	if *path == "" || *producer == 0 {
