@@ -106,7 +106,7 @@ func (e *raftEngine) run(ctx context.Context) (err error) {
 	e.tr.start(ctx)
 	ticker := time.NewTicker(e.tick)
 	defer ticker.Stop()
-	ticks := 0
+	ticks, proposed := 0, 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -123,14 +123,8 @@ func (e *raftEngine) run(ctx context.Context) (err error) {
 				e.rep.Step(m)
 			}
 		case p := <-e.proposals:
-			// Take everything already queued so it shares one Ready (and
-			// one fsync). Only this goroutine receives, so len is safe.
 			e.handleProposal(p)
-			n := len(e.proposals)
-			for range n {
-				e.handleProposal(<-e.proposals)
-			}
-			e.m.groupSize.Observe(float64(n + 1))
+			proposed++
 		case done := <-e.reads:
 			e.readIndex(done)
 		case r := <-e.reports:
@@ -142,6 +136,33 @@ func (e *raftEngine) run(ctx context.Context) (err error) {
 			}
 		case ch := <-e.statusReq:
 			ch <- e.buildStatus()
+		}
+		// Take everything else already queued before the next Ready, so one
+		// persistence round (one fsync) covers all of it: on the leader,
+		// proposals that arrived microseconds apart; on a follower, several
+		// append batches from the leader. Bounded so a flood of input cannot
+		// starve the Ready loop.
+		for drained := 0; drained < 4096; drained++ {
+			select {
+			case msgs := <-e.inbound:
+				for _, m := range msgs {
+					e.rep.Step(m)
+				}
+				continue
+			case p := <-e.proposals:
+				e.handleProposal(p)
+				proposed++
+				continue
+			case done := <-e.reads:
+				e.readIndex(done)
+				continue
+			default:
+			}
+			break
+		}
+		if proposed > 0 {
+			e.m.groupSize.Observe(float64(proposed))
+			proposed = 0
 		}
 		if err := e.processReady(ctx); err != nil {
 			return err
