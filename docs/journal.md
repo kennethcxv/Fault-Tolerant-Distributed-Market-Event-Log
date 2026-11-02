@@ -59,13 +59,15 @@ Done:
   `node_failed` to everything except `/v1/status`.
 
 Bug found by the crash test: `TestCrashLeavesAtomicPrefixOfBatches` first
-failed on 8 of 20 seeds, and each failure lost the entire database, even
-batches committed with `Sync`. Root cause: `storage.Open` created the data
-directory but never fsynced its parent. A new directory entry isn't durable
-until its parent is synced, so a crash soon after first start could lose the
-directory and everything in it. Pebble syncs the directories it creates, but
-not the parents of its own data directory. Fixed by `mkdirAllDurable`, which
-fsyncs every ancestor. This would also happen on real ext4/APFS after power
-loss; it isn't specific to the simulator.
+failed on several seeds, and each failure lost the entire database, including
+batches committed with `Sync`. Root cause: `storage.Open` created the node
+directory with a plain `MkdirAll` and then opened Pebble in a subdirectory.
+Pebble creates its directory and fsyncs the parents of whatever it creates, but
+it stops at the nearest directory that already exists. Our node directory
+already existed, so its own entry in its parent was never synced, and a crash
+could lose the whole tree. A first fix fsynced every ancestor ourselves. After
+reading Pebble's `mkdirAllAndSyncParents`, the simpler fix was to remove our
+`MkdirAll` and let Pebble create the path. Real filesystems behave the same way
+after power loss; this isn't specific to the simulator.
 
 Not yet measured: throughput and latency. Nothing about performance is claimed.

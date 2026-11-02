@@ -70,10 +70,10 @@ func Open(o Options) (*Store, error) {
 	if o.Logger == nil {
 		o.Logger = slog.Default()
 	}
+	// Pebble creates dbDir and fsyncs each directory it creates. Creating
+	// o.Dir ourselves first would hide it from that and leave its entry
+	// unsynced (found by TestCrashLeavesAtomicPrefixOfBatches).
 	dbDir := o.FS.PathJoin(o.Dir, "db")
-	if err := mkdirAllDurable(o.FS, dbDir); err != nil {
-		return nil, fmt.Errorf("storage: create %s: %w", dbDir, err)
-	}
 	// WALFailover stays nil: D4 relies on Pebble writing a single WAL, so a
 	// synced batch makes every earlier batch durable too.
 	db, err := pebble.Open(dbDir, &pebble.Options{
@@ -90,31 +90,6 @@ func Open(o Options) (*Store, error) {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
-
-// mkdirAllDurable creates dir and fsyncs every ancestor. A new directory entry
-// is not durable until its parent directory is synced; without this a crash
-// shortly after first start can lose the whole data directory, including
-// batches Pebble reported as synced.
-func mkdirAllDurable(fs vfs.FS, dir string) error {
-	if err := fs.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	for d := dir; ; {
-		parent := fs.PathDir(d)
-		f, err := fs.OpenDir(parent)
-		if err != nil {
-			return err
-		}
-		err = errors.Join(f.Sync(), f.Close())
-		if err != nil {
-			return err
-		}
-		if parent == d {
-			return nil
-		}
-		d = parent
-	}
-}
 
 // Meta is the state machine's position, read once at startup.
 type Meta struct {
