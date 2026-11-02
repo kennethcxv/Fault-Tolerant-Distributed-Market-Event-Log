@@ -95,5 +95,10 @@ milestone.
 
 ## Latest verification
 
-`go test -race -count=1 ./...` passes; simulator 100+ seeds; e2e three runs in
-a row; fresh clone passes `go test -short ./...` (2026-11-02).
+At commit 4036d11 (2026-11-02):
+
+- CI green: gofmt, vet, staticcheck, `go test -race ./...` including the
+  multi-process e2e tests, and the C++ spool test under ThreadSanitizer.
+- Locally: the simulator with 100 randomized seeds.
+- A fresh clone of the public repo builds, passes `go test -short ./...`,
+  and runs `scripts/demo-replace-node.sh` successfully.
