@@ -108,9 +108,11 @@ func (s *Store) SaveRaft(hs *raftpb.HardState, ents []*raftpb.Entry, snap *raftp
 }
 
 // SaveSnapshotAndCompact records a locally created snapshot and drops log
-// entries through compactThrough. It always syncs: per D4, this synced write
-// is also what makes the unsynced state-machine batches before it durable, so
-// the entries it deletes are never needed to rebuild the state machine.
+// entries through compactThrough. It does not need its own fsync: the batch
+// enters the single WAL after the state-machine batches for those entries,
+// and Pebble recovers a WAL prefix, so the deletion can only survive a crash
+// if the state those entries produced survives too (decision D4). Removing a
+// Sync here did not break any crash test, which is consistent with this.
 func (s *Store) SaveSnapshotAndCompact(snap *raftpb.Snapshot, compactThrough uint64) error {
 	b := s.db.NewBatch()
 	defer b.Close()
@@ -122,7 +124,7 @@ func (s *Store) SaveSnapshotAndCompact(snap *raftpb.Snapshot, compactThrough uin
 			return err
 		}
 	}
-	return b.Commit(pebble.Sync)
+	return b.Commit(pebble.NoSync)
 }
 
 func (s *Store) getProto(key []byte, m proto.Message) error {

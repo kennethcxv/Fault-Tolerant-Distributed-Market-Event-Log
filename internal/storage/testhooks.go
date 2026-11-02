@@ -18,3 +18,12 @@ func CorruptForTest(s *Store, offset uint64) error {
 func TruncateRaftLogForTest(s *Store, from uint64) error {
 	return s.db.DeleteRange(raftEntryKey(from), raftEntryKey(1<<63), pebble.Sync)
 }
+
+// SetInstallHookForTest makes InstallSnapshot commit in batches of about
+// chunk bytes and call hook after each intermediate batch, so tests can crash
+// mid-install. It returns a function that restores the defaults.
+func SetInstallHookForTest(chunk int, hook func()) (restore func()) {
+	oldChunk, oldHook := installChunk, installHook
+	installChunk, installHook = chunk, hook
+	return func() { installChunk, installHook = oldChunk, oldHook }
+}
