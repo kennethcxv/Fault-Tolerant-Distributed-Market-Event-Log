@@ -33,7 +33,7 @@ HTML visualization of the history to `$MLOG_SIM_ARTIFACTS` (default
 | Node restart with persisted state | `sim.TestWholeClusterPowerLoss`, `sim.TestRandomCrashRestartWithTornWrites`, `server.TestLeaderStopElectsNewLeaderAndOldLeaderCatchesUp` |
 | Snapshot installation and replay | `sim.TestLaggingFollowerCatchesUpViaSnapshot`, `sim.TestCrashDuringSnapshotInstall`, `server.TestRestartedFollowerCatchesUpViaSnapshot` |
 | Corrupted or truncated storage | `storage.TestReadDetectsCorruption`, `sim.TestTruncatedRaftLogIsRefusedAtStartup`, `server.TestCorruptRecordOnFollowerStopsOnlyThatNode`, `server.TestTruncatedWALOnFollowerIsDetected` |
-| Consumer restart from checkpoint | `replay.TestInterruptedReplayResumesToSameHash`, `replay.TestCheckpointRestoreAndExplicitEndOffset`, milestone 8 consumer tests |
+| Consumer restart from checkpoint | `replay.TestConsumerRestartsReachSameState` (100+ random kills, torn temp files), `e2e.TestConsumerProcessSurvivesSIGKILL` (30 SIGKILLs of `mlogctl consume`), `replay.TestConsumerRebuildsWhenLocalStateIsLost`, `replay.TestInterruptedReplayResumesToSameHash` |
 
 ## Invariants
 

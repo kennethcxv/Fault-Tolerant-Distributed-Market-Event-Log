@@ -287,3 +287,30 @@ Findings:
   linearizable producer lookup returned `no_leader` and wasn't retried. The
   client now retries transient read failures, and `cluster.sh start` waits
   for a leader.
+
+## 2026-11-02 — Milestone 8: consumer checkpointing and deduplication
+
+Done:
+
+- `replay.Consumer` follows the log into an order book. It writes a local
+  checkpoint file, then commits the offset to the replicated consumer
+  checkpoint. On restart it resumes from the local file. Re-delivered offsets
+  are skipped, so the state matches exactly-once application.
+- `mlogctl consume`. `GET /v1/consumers` and a consumers section in
+  `mlogctl status`, showing each consumer's checkpoint and backlog. `replay`,
+  `consume` and `load` no longer stop at the CLI's 10 s default timeout.
+- Tests:
+  - an in-process consumer cancelled at random points 100–130 times per run,
+    sometimes with a torn `.tmp` file left behind (5 runs);
+  - a lost local state file rebuilds from offset 1;
+  - a damaged state file is refused;
+  - `mlogctl consume` SIGKILLed 30 times over a 20,000-event log. Every run
+    ends with the same hash as a clean replay, and the cluster checkpoint at
+    the end of the log.
+
+Bug found: the restart test reached the right state but left the cluster
+checkpoint at 5,238 instead of 6,000. A previous run had been killed after
+writing the local file for offset 6,000 and before committing it. On restart
+the consumer was already at its target, so it exited without committing. The
+crash window was described in the design but not handled. The consumer now
+commits its local offset at startup whenever the cluster checkpoint is behind.

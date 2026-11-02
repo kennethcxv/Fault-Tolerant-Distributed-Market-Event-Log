@@ -7,7 +7,7 @@ storage engine come from those libraries. This repository adds everything around
 storage layout, Raft integration, state machine, snapshot transfer, transport, fault-injection
 harness, and replay engine.
 
-**Status: milestones 1–7 of 10 done** (see [STATUS](docs/STATUS.md)). Nothing here is claimed to
+**Status: milestones 1–8 of 10 done** (see [STATUS](docs/STATUS.md)). Nothing here is claimed to
 work unless a test or benchmark in this repository shows it.
 
 - [Design: guarantees, failure model, architecture](docs/design.md)
@@ -45,6 +45,6 @@ continues).
 | 5 | Durable restart and recovery | ✔ crash, power-loss, truncation tests |
 | 6 | Snapshots and log compaction | ✔ snapshot catch-up, crash mid-install |
 | 7 | Fault-injection harness | ✔ randomized simulator, multi-process e2e ([testing](docs/testing.md)) |
-| 8 | Consumer checkpoints, dedup | consumer restart reaches the same replay hash |
+| 8 | Consumer checkpoints, dedup | ✔ consumer survives SIGKILL with identical state |
 | 9 | Project 1 integration | C++ spool writer → publisher → cluster, tested in CI |
 | 10 | Performance analysis, final docs | benchmarks with stated conditions |

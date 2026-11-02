@@ -253,6 +253,22 @@ prefix. With `linearizable=true`, the node gets a read index from the leader
 (ReadIndex), waits until it has applied that index, then reads locally. There
 are no leader leases, because leases depend on bounded clock drift.
 
+**Consumers** (`replay.Consumer`, `mlogctl consume`). A consumer reads
+committed events in offset order and applies them to an order book. Every N
+events it does two things, in this order:
+
+1. writes its state to a local checkpoint file (temp file, fsync, rename,
+   fsync the directory);
+2. commits the offset to its replicated checkpoint in the cluster.
+
+On restart it resumes from the local file. If the file is ahead of the
+cluster checkpoint, which happens when the consumer crashed between the two
+steps, it commits the local offset first. Events after the last local
+checkpoint are delivered again. The replay engine skips offsets it has already
+applied, and replay is deterministic, so the state is the same as with
+exactly-once application. If the local file is lost, the consumer rebuilds
+from offset 1. A damaged file is refused, not silently replaced.
+
 ## 8. Outages and the Project 1 contract
 
 Raft stays off Project 1's hot path. The engine hands each event to a

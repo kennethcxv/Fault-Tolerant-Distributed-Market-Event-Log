@@ -28,10 +28,11 @@ milestone.
 - M7 Fault-injection harness: randomized combined-fault simulator test,
   named scenarios, multi-process e2e test with Porcupine, `mlogctl fault`,
   `load`, `leader`, demo scripts, `docs/testing.md` (mutation checks).
+- M8 Consumer checkpointing: `replay.Consumer`, `mlogctl consume`, consumer
+  backlog in status, restart tests in-process and with SIGKILL.
 
 ## Remaining acceptance criteria
 
-- [ ] M8 Consumer checkpoint/restart flow, dedup under duplicated requests
 - [ ] M9 C++ spool writer, publisher sidecar, CI build of the C++ side
 - [ ] M10 Benchmarks, metrics, multiprocess demo scripts, final docs, résumé bullets
 - [ ] Membership change (add/remove node), needed to replace a node whose disk is lost (D10)
@@ -47,8 +48,7 @@ None open.
 
 ## Next steps
 
-Start M8: a consumer that replays from the cluster, keeps a local
-order-book checkpoint file, and commits its offset to the replicated consumer
-checkpoint. Restart test: kill the consumer at random points and check that
-the final hash equals an uninterrupted replay. Add a consumer-backlog
-section to `mlogctl status`.
+Start M9: C++ header-only spool writer (CRC32C, envelope v1, SPSC ring,
+background writer thread, GAP records), a C++ example and test built in CI,
+a Go spool reader, and `mlog-publisher` (tail spool, resume from the
+producer's last committed sequence). Then docs/integration.md for Project 1.
