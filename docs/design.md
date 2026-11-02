@@ -17,7 +17,8 @@ offset, commit checkpoints, and replay.
 
 Out of scope: the latency-critical market-data path (Project 1 publishes to the
 log asynchronously, see §8), sharding across multiple Raft groups,
-geo-replication, authentication and TLS, and runtime membership changes (D10).
+geo-replication, and authentication and TLS. Membership changes are limited to
+one voter at a time (D10).
 
 ## 2. Event lifecycle
 
@@ -80,7 +81,8 @@ Tolerated: up to f crashed or partitioned nodes in a cluster of 2f+1 (1 of 3,
 Detected, not tolerated automatically: silent disk corruption such as bit flips
 and truncated files. The record CRC and Pebble's block and WAL checksums detect
 it. The node stops serving instead of returning bad data. Recovery is an
-operator action (D10). A disk that lost acknowledged Raft entries is caught at
+operator action: remove the node and add a replacement under a new ID
+(`mlogctl member`, D10). A disk that lost acknowledged Raft entries is caught at
 whichever point comes first:
 
 - at startup, if the hard state commits past the end of the log;

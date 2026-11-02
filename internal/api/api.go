@@ -65,9 +65,21 @@ type PeerStatus struct {
 	Lag uint64 `json:"lag"`
 }
 
+type Member struct {
+	ID  uint64 `json:"id"`
+	URL string `json:"url"`
+}
+
+type MemberRequest struct {
+	ID  uint64 `json:"id"`
+	URL string `json:"url"`
+}
+
 type Status struct {
 	ID         uint64       `json:"id"`
 	Mode       string       `json:"mode"`
+	ClusterID  string       `json:"cluster_id,omitempty"`
+	Members    []Member     `json:"members,omitempty"`
 	Role       string       `json:"role"`
 	Term       uint64       `json:"term"`
 	Leader     uint64       `json:"leader"`

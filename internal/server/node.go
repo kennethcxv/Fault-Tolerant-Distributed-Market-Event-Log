@@ -32,9 +32,16 @@ type Config struct {
 	// Standalone runs without Raft: proposals are applied directly with one
 	// fsync per group. It is the single-node baseline for benchmarks.
 	Standalone bool
-	// Peers maps every voter's id to its base URL (raft mode). All nodes must
-	// be started with the same map.
+	// Peers maps voters' ids to base URLs (raft mode). A new cluster
+	// bootstraps from it, and every node starting a cluster must get the same
+	// map. Afterwards membership comes from the replicated log; these entries
+	// only serve as addresses for peers the log does not know yet.
 	Peers map[uint64]string
+	// Join starts a node with an empty data directory as a new member of an
+	// existing cluster (see mlogctl member add) instead of bootstrapping one.
+	Join bool
+	// ClusterID is required with Join: the id printed by `mlogctl member list`.
+	ClusterID string
 	// SnapshotEntries and CompactKeep control log compaction (replica.Config).
 	SnapshotEntries uint64
 	CompactKeep     uint64
@@ -108,17 +115,18 @@ func Start(cfg Config) (*Node, error) {
 	if cfg.Standalone {
 		n.eng = newStandalone(cfg.ID, f, cfg.Fsync, n.m)
 	} else {
-		peers := make([]uint64, 0, len(cfg.Peers))
-		for id := range cfg.Peers {
-			peers = append(peers, id)
-		}
-		rep, err := replica.Open(replica.Config{ID: cfg.ID, Peers: peers, ElectionTick: 10, HeartbeatTick: 1,
+		rep, err := replica.Open(replica.Config{ID: cfg.ID, Peers: cfg.Peers, Join: cfg.Join, ElectionTick: 10, HeartbeatTick: 1,
 			Sync: cfg.Fsync, SnapshotEntries: cfg.SnapshotEntries, CompactKeep: cfg.CompactKeep, Logger: log}, st, f)
 		if err != nil {
 			st.Close()
 			return nil, err
 		}
-		n.raft = newRaftEngine(cfg.ID, rep, cfg.Peers, cfg.TickInterval, cfg.Fsync, log, n.flts, n.m)
+		cluster, err := resolveClusterID(st, cfg)
+		if err != nil {
+			st.Close()
+			return nil, err
+		}
+		n.raft = newRaftEngine(cfg.ID, cluster, rep, cfg.Peers, cfg.TickInterval, cfg.Fsync, log, n.flts, n.m)
 		n.eng = n.raft
 	}
 	n.ln = cfg.Listener
@@ -145,6 +153,32 @@ func Start(cfg Config) (*Node, error) {
 	log.Info("node started", "listen", n.ln.Addr().String(), "applied", f.Applied(), "last_offset", f.LastOffset(),
 		"fsync", cfg.Fsync, "standalone", cfg.Standalone)
 	return n, nil
+}
+
+// resolveClusterID returns the id peers must present (decision D15). It is
+// stored on first start, so that later restarts don't depend on --peers,
+// which goes stale after membership changes. A bootstrapping node derives it
+// from the initial peer list; a joining node is given it.
+func resolveClusterID(st *storage.Store, cfg Config) (string, error) {
+	stored, err := st.ClusterID()
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case stored != "":
+		if cfg.ClusterID != "" && cfg.ClusterID != stored {
+			return "", fmt.Errorf("server: data directory belongs to cluster %s, not %s", stored, cfg.ClusterID)
+		}
+		return stored, nil
+	case cfg.Join:
+		if cfg.ClusterID == "" {
+			return "", errors.New("server: --join requires --cluster-id (see mlogctl member list)")
+		}
+		stored = cfg.ClusterID
+	default:
+		stored = clusterID(cfg.Peers)
+	}
+	return stored, st.SetClusterID(stored)
 }
 
 func (n *Node) Addr() string { return n.ln.Addr().String() }

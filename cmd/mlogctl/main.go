@@ -33,6 +33,7 @@ var commands = map[string]command{
 	"verify":     {summary: "checksum every node's log over a common prefix and compare", run: cmdVerify},
 	"fault":      {summary: "inject network faults: fault show | isolate ID | set ID [flags] | heal", run: cmdFault},
 	"load":       {summary: "append synthetic order-book events and report throughput and latency", run: cmdLoad, long: true},
+	"member":     {summary: "cluster membership: member list | add ID URL | remove ID", run: cmdMember},
 }
 
 func main() {

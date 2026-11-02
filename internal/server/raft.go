@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -20,26 +21,29 @@ import (
 // raftEngine owns the replica. Everything that touches it runs on the run
 // goroutine; HTTP handlers and transport goroutines talk to it over channels.
 type raftEngine struct {
-	id    uint64
-	rep   *replica.Replica
-	tr    *transport
-	peers map[uint64]string
-	tick  time.Duration
-	fsync bool
-	log   *slog.Logger
-	m     *metrics
+	id      uint64
+	cluster string
+	rep     *replica.Replica
+	tr      *transport
+	peers   map[uint64]string
+	tick    time.Duration
+	fsync   bool
+	log     *slog.Logger
+	m       *metrics
 
 	proposals chan *raftProposal
 	reads     chan chan error
 	inbound   chan []*raftpb.Message
 	reports   chan peerReport
 	statusReq chan chan api.Status
+	memberReq chan memberChange
 	stopped   chan struct{}
 
 	// Owned by run. Request ids start from a random epoch so that a result
 	// for an entry proposed by an earlier incarnation of this node can never
 	// be delivered to a new request.
 	nextID      uint64
+	confPending bool // a membership change is proposed but not yet applied
 	waiters     map[uint64]waiter
 	readWaiters map[uint64]readWaiter
 }
@@ -47,6 +51,12 @@ type raftEngine struct {
 type readWaiter struct {
 	done     chan error
 	deadline time.Time
+}
+
+type memberChange struct {
+	id   uint64
+	url  string // "" removes
+	done chan error
 }
 
 // peerReport tells the run loop that a peer was unreachable or that a
@@ -72,22 +82,31 @@ type proposeResult struct {
 	err error
 }
 
-func newRaftEngine(id uint64, rep *replica.Replica, peers map[uint64]string, tick time.Duration, fsync bool, log *slog.Logger, f *faults, m *metrics) *raftEngine {
+func newRaftEngine(id uint64, cluster string, rep *replica.Replica, flagPeers map[uint64]string, tick time.Duration, fsync bool, log *slog.Logger, f *faults, m *metrics) *raftEngine {
+	// Address book: peers from flags, overridden by the replicated membership.
+	peers := map[uint64]string{}
+	for id, url := range flagPeers {
+		peers[id] = url
+	}
+	for id, url := range rep.FSM().Members() {
+		peers[id] = url
+	}
 	var seed [8]byte
 	rand.Read(seed[:])
 	e := &raftEngine{
-		id: id, rep: rep, peers: peers, tick: tick, fsync: fsync, log: log, m: m,
+		id: id, cluster: cluster, rep: rep, peers: peers, tick: tick, fsync: fsync, log: log, m: m,
 		proposals:   make(chan *raftProposal, 4096),
 		reads:       make(chan chan error, 1024),
 		inbound:     make(chan []*raftpb.Message, 1024),
 		reports:     make(chan peerReport, 1024),
 		statusReq:   make(chan chan api.Status),
+		memberReq:   make(chan memberChange),
 		stopped:     make(chan struct{}),
 		nextID:      binary.LittleEndian.Uint64(seed[:]),
 		waiters:     map[uint64]waiter{},
 		readWaiters: map[uint64]readWaiter{},
 	}
-	e.tr = newTransport(id, peers, log, f, func(peer uint64) {
+	e.tr = newTransport(id, cluster, peers, log, f, func(peer uint64) {
 		select {
 		case e.reports <- peerReport{peer: peer}:
 		default:
@@ -149,6 +168,8 @@ func (e *raftEngine) run(ctx context.Context) (err error) {
 			}
 		case ch := <-e.statusReq:
 			ch <- e.buildStatus()
+		case mc := <-e.memberReq:
+			mc.done <- e.proposeMembership(mc)
 		}
 		// Take everything else already queued before the next Ready, so one
 		// persistence round (one fsync) covers all of it: on the leader,
@@ -208,8 +229,78 @@ func (e *raftEngine) processReady(ctx context.Context) error {
 		if out.SoftState != nil {
 			e.onRoleChange(*out.SoftState)
 		}
+		if out.Members != nil {
+			e.confPending = false
+		}
+		for id, url := range out.Members {
+			if id != e.id && url != e.peers[id] {
+				e.log.Info("membership changed", "peer", id, "url", url)
+				e.tr.setPeer(id, url)
+				if url == "" {
+					delete(e.peers, id)
+				} else {
+					e.peers[id] = url
+				}
+			}
+		}
+		if out.Removed {
+			return errors.New("this node was removed from the cluster by a membership change")
+		}
 	}
 	return nil
+}
+
+// proposeMembership validates and proposes one voter change. It returns once
+// the change is proposed; callers watch /v1/status for it to take effect.
+func (e *raftEngine) proposeMembership(mc memberChange) error {
+	if !e.rep.IsLeader() {
+		return e.notLeader()
+	}
+	// Raft allows one pending change and silently turns a second into a
+	// no-op; reject it explicitly instead.
+	if e.confPending {
+		return &api.Error{Code: api.CodeOverloaded, Message: "another membership change is still being applied; retry"}
+	}
+	voters := e.rep.FSM().ConfState().GetVoters()
+	isVoter := slices.Contains(voters, mc.id)
+	cc := &raftpb.ConfChange{NodeId: new(mc.id)}
+	switch {
+	case mc.id == 0:
+		return &api.Error{Code: api.CodeInvalid, Message: "member id must be >= 1"}
+	case mc.url != "" && isVoter:
+		return &api.Error{Code: api.CodeInvalid, Message: fmt.Sprintf("node %d is already a member", mc.id)}
+	case mc.url == "" && !isVoter:
+		return &api.Error{Code: api.CodeInvalid, Message: fmt.Sprintf("node %d is not a member", mc.id)}
+	case mc.url == "" && len(voters) == 1:
+		return &api.Error{Code: api.CodeInvalid, Message: "cannot remove the last member"}
+	case mc.url != "":
+		cc.Type, cc.Context = raftpb.ConfChangeAddNode.Enum(), []byte(mc.url)
+	default:
+		cc.Type = raftpb.ConfChangeRemoveNode.Enum()
+	}
+	if err := e.rep.ProposeConfChange(cc); err != nil {
+		return &api.Error{Code: api.CodeOverloaded, Message: "membership change dropped: " + err.Error()}
+	}
+	e.confPending = true
+	e.log.Info("membership change proposed", "type", cc.GetType().String(), "node", mc.id, "url", mc.url)
+	return nil
+}
+
+func (e *raftEngine) changeMembership(ctx context.Context, id uint64, url string) error {
+	mc := memberChange{id: id, url: url, done: make(chan error, 1)}
+	select {
+	case e.memberReq <- mc:
+	case <-e.stopped:
+		return &api.Error{Code: api.CodeNodeFailed, Message: "node is not running"}
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case err := <-mc.done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // sendMessages hands ordinary messages to the per-peer queues and starts a
@@ -246,6 +337,7 @@ func (e *raftEngine) sendMessages(ctx context.Context, msgs []*raftpb.Message) {
 func (e *raftEngine) onRoleChange(s raft.SoftState) {
 	e.log.Info("raft role changed", "role", s.RaftState.String(), "leader", s.Lead, "term", e.rep.Term())
 	e.m.onRoleChange(s)
+	e.confPending = false // a new leader's log decides; a stale flag must not block changes
 	if s.RaftState != raft.StateLeader {
 		e.failWaiters(&api.Error{Code: api.CodeOutcomeUnknown, Message: "leadership changed while the command was pending; retry with the same sequence numbers"})
 	}
@@ -355,9 +447,12 @@ func (e *raftEngine) buildStatus() api.Status {
 	first, last := e.rep.LogBounds()
 	f := e.rep.FSM()
 	s := api.Status{
-		ID: e.id, Mode: "raft", Role: roleName(st.RaftState), Term: st.GetTerm(), Leader: st.Lead,
+		ID: e.id, Mode: "raft", ClusterID: e.cluster, Role: roleName(st.RaftState), Term: st.GetTerm(), Leader: st.Lead,
 		LeaderURL: e.peers[st.Lead], Commit: st.GetCommit(), Applied: f.Applied(), LastOffset: f.LastOffset(),
 		FirstIndex: first, LastIndex: last, Snapshot: e.rep.SnapshotIndex(), Fsync: fsyncName(e.fsync),
+	}
+	for _, id := range f.ConfState().GetVoters() {
+		s.Members = append(s.Members, api.Member{ID: id, URL: e.peers[id]})
 	}
 	ids := make([]uint64, 0, len(st.Progress))
 	for id := range st.Progress {

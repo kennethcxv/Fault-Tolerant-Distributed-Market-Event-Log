@@ -53,6 +53,8 @@ func (n *Node) routes() *http.ServeMux {
 	if n.raft != nil {
 		mux.HandleFunc("POST /raft/message", n.handleRaftMessage)
 		mux.HandleFunc("POST /raft/snapshot", n.handleRaftSnapshot)
+		mux.HandleFunc("POST /v1/members", n.guard(n.handleAddMember))
+		mux.HandleFunc("DELETE /v1/members/{id}", n.guard(n.handleRemoveMember))
 	}
 	return mux
 }
@@ -82,6 +84,39 @@ func (n *Node) handleRaftMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "node stopped", http.StatusServiceUnavailable)
 	case <-r.Context().Done():
 	}
+}
+
+// handleAddMember proposes adding a voter. The change is asynchronous:
+// /v1/status lists members once it has been applied.
+func (n *Node) handleAddMember(w http.ResponseWriter, r *http.Request) {
+	var req api.MemberRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if !strings.HasPrefix(req.URL, "http") {
+		writeError(w, &api.Error{Code: api.CodeInvalid, Message: "url must be http(s)://host:port"})
+		return
+	}
+	n.memberChange(w, r, req.ID, strings.TrimRight(req.URL, "/"))
+}
+
+func (n *Node) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeError(w, &api.Error{Code: api.CodeInvalid, Message: "member id must be an unsigned integer"})
+		return
+	}
+	n.memberChange(w, r, id, "")
+}
+
+func (n *Node) memberChange(w http.ResponseWriter, r *http.Request, id uint64, url string) {
+	ctx, cancel := context.WithTimeout(r.Context(), n.cfg.RequestTimeout)
+	defer cancel()
+	if err := n.raft.changeMembership(ctx, id, url); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "proposed", "id": id, "url": url})
 }
 
 // handleRaftSnapshot receives a MsgSnap and the state machine stream. The

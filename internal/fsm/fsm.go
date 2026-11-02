@@ -54,6 +54,7 @@ type FSM struct {
 	producers  map[uint64]storage.Producer
 	consumers  map[string]uint64
 	confState  *raftpb.ConfState
+	members    map[uint64]string
 
 	publishedLast    atomic.Uint64
 	publishedApplied atomic.Uint64
@@ -79,6 +80,11 @@ func (f *FSM) Reload() error {
 	if err != nil {
 		return err
 	}
+	members, err := f.store.LoadMembers()
+	if err != nil {
+		return err
+	}
+	f.members = members
 	f.applied, f.lastOffset, f.confState = meta.Applied, meta.LastOffset, meta.ConfState
 	f.producers, f.consumers = producers, consumers
 	f.publish()
@@ -89,19 +95,36 @@ func (f *FSM) Applied() uint64              { return f.publishedApplied.Load() }
 func (f *FSM) LastOffset() uint64           { return f.publishedLast.Load() }
 func (f *FSM) ConfState() *raftpb.ConfState { return f.confState }
 
+// Members returns a copy of the replicated peer URLs (owner goroutine only).
+func (f *FSM) Members() map[uint64]string {
+	out := make(map[uint64]string, len(f.members))
+	for id, url := range f.members {
+		out[id] = url
+	}
+	return out
+}
+
+// Membership is the effect of the conf-change entries in one Apply call:
+// raft's resulting ConfState and the voters whose URLs changed ("" when a
+// voter was removed).
+type Membership struct {
+	ConfState *raftpb.ConfState
+	URLs      map[uint64]string
+}
+
 func (f *FSM) publish() {
 	f.publishedLast.Store(f.lastOffset)
 	f.publishedApplied.Store(f.applied)
 }
 
 // Apply applies committed entries in one atomic batch: records, producer and
-// consumer state, the new ConfState (if cs is non-nil) and the applied index
-// land together or not at all. Entries at or below the applied index are
+// consumer state, membership (if m is non-nil) and the applied index land
+// together or not at all. Entries at or below the applied index are
 // skipped, which makes re-delivery after a restart or snapshot install safe.
 //
 // An error means storage failed; in-memory state may be ahead of disk and the
 // caller must stop the node.
-func (f *FSM) Apply(ents []*raftpb.Entry, cs *raftpb.ConfState, sync bool) ([]Result, error) {
+func (f *FSM) Apply(ents []*raftpb.Entry, m *Membership, sync bool) ([]Result, error) {
 	b := f.store.NewBatch()
 	defer b.Close()
 	var results []Result
@@ -119,14 +142,24 @@ func (f *FSM) Apply(ents []*raftpb.Entry, cs *raftpb.ConfState, sync bool) ([]Re
 		}
 		f.applied = e.GetIndex()
 	}
-	if f.applied == start && cs == nil {
+	if f.applied == start && m == nil {
 		return nil, nil
 	}
-	if cs != nil {
-		if err := b.SetConfState(cs); err != nil {
+	if m != nil {
+		if err := b.SetConfState(m.ConfState); err != nil {
 			return nil, err
 		}
-		f.confState = cs
+		f.confState = m.ConfState
+		for id, url := range m.URLs {
+			if err := b.SetMember(id, url); err != nil {
+				return nil, err
+			}
+			if url == "" {
+				delete(f.members, id)
+			} else {
+				f.members[id] = url
+			}
+		}
 	}
 	if err := b.SetApplied(f.applied); err != nil {
 		return nil, err

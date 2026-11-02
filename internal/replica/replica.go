@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"go.etcd.io/raft/v3"
@@ -27,9 +28,12 @@ import (
 
 type Config struct {
 	ID uint64
-	// Peers lists every voter. It is used only to bootstrap a new cluster;
-	// after that, membership comes from the replicated log.
-	Peers         []uint64
+	// Peers maps every initial voter to its URL. It is used only to
+	// bootstrap a new cluster; after that, membership comes from the log.
+	Peers map[uint64]string
+	// Join starts a fresh node without bootstrapping: it waits for the leader
+	// to add it (membership change) and catch it up.
+	Join          bool
 	ElectionTick  int
 	HeartbeatTick int
 	// Sync fsyncs Raft state before messages are sent. false voids durability
@@ -63,6 +67,11 @@ type Output struct {
 	// installed from the leader or taken locally during this Ready, or 0.
 	SnapshotInstalled uint64
 	SnapshotCreated   uint64
+	// Members holds URL changes from applied membership changes ("" for a
+	// removed voter). After a snapshot install it holds every member.
+	Members map[uint64]string
+	// Removed is set when this node applied its own removal.
+	Removed bool
 }
 
 type Replica struct {
@@ -163,15 +172,23 @@ func Open(cfg Config, st *storage.Store, f *fsm.FSM) (*Replica, error) {
 		CheckQuorum:               true,
 		PreVote:                   true,
 		DisableProposalForwarding: true,
+		StepDownOnRemoval:         true,
 		Logger:                    raftLogger{log.With("component", "raft")},
 	})
 	if err != nil {
 		return nil, err
 	}
-	if fresh {
-		peers := make([]raft.Peer, len(cfg.Peers))
-		for i, id := range cfg.Peers {
-			peers[i] = raft.Peer{ID: id}
+	if fresh && !cfg.Join {
+		ids := make([]uint64, 0, len(cfg.Peers))
+		for id := range cfg.Peers {
+			ids = append(ids, id)
+		}
+		slices.Sort(ids)
+		peers := make([]raft.Peer, len(ids))
+		for i, id := range ids {
+			// The URL rides in the conf change, so the state machine (and any
+			// node that later joins) learns every member's address.
+			peers[i] = raft.Peer{ID: id, Context: []byte(cfg.Peers[id])}
 		}
 		if err := rn.Bootstrap(peers); err != nil {
 			return nil, err
@@ -188,15 +205,21 @@ func Open(cfg Config, st *storage.Store, f *fsm.FSM) (*Replica, error) {
 func (r *Replica) Tick()                        { r.rn.Tick() }
 func (r *Replica) Step(m *raftpb.Message) error { return r.rn.Step(m) }
 func (r *Replica) Propose(data []byte) error    { return r.rn.Propose(data) }
-func (r *Replica) ReadIndex(rctx []byte)        { r.rn.ReadIndex(rctx) }
-func (r *Replica) ReportUnreachable(id uint64)  { r.rn.ReportUnreachable(id) }
-func (r *Replica) Campaign() error              { return r.rn.Campaign() }
-func (r *Replica) HasReady() bool               { return r.rn.HasReady() }
-func (r *Replica) Status() raft.Status          { return r.rn.Status() }
-func (r *Replica) SoftState() raft.SoftState    { return r.soft }
-func (r *Replica) Term() uint64                 { return r.rn.BasicStatus().GetTerm() }
-func (r *Replica) IsLeader() bool               { return r.soft.RaftState == raft.StateLeader }
-func (r *Replica) FSM() *fsm.FSM                { return r.fsm }
+
+// ProposeConfChange proposes adding or removing one voter. Raft allows one
+// pending change at a time and turns a second one into a no-op.
+func (r *Replica) ProposeConfChange(cc *raftpb.ConfChange) error {
+	return r.rn.ProposeConfChange(cc)
+}
+func (r *Replica) ReadIndex(rctx []byte)       { r.rn.ReadIndex(rctx) }
+func (r *Replica) ReportUnreachable(id uint64) { r.rn.ReportUnreachable(id) }
+func (r *Replica) Campaign() error             { return r.rn.Campaign() }
+func (r *Replica) HasReady() bool              { return r.rn.HasReady() }
+func (r *Replica) Status() raft.Status         { return r.rn.Status() }
+func (r *Replica) SoftState() raft.SoftState   { return r.soft }
+func (r *Replica) Term() uint64                { return r.rn.BasicStatus().GetTerm() }
+func (r *Replica) IsLeader() bool              { return r.soft.RaftState == raft.StateLeader }
+func (r *Replica) FSM() *fsm.FSM               { return r.fsm }
 func (r *Replica) LogBounds() (first, last uint64) {
 	first, _ = r.ms.FirstIndex()
 	last, _ = r.ms.LastIndex()
@@ -258,8 +281,9 @@ func (r *Replica) Ready(send func([]*raftpb.Message)) (Output, error) {
 			return out, err
 		}
 		out.SnapshotInstalled = r.applied
+		out.Members = r.fsm.Members()
 	}
-	if out.Results, err = r.apply(rd.CommittedEntries); err != nil {
+	if out.Results, err = r.apply(rd.CommittedEntries, &out); err != nil {
 		return out, fmt.Errorf("replica: apply: %w", err)
 	}
 	out.ApplyTime = time.Since(start)
@@ -313,11 +337,11 @@ func (r *Replica) persist(rd *raft.Ready) (bool, error) {
 // machine, which writes without fsync: the next synced Raft write makes the
 // batch durable (single WAL, decision D4), and until then the entries are
 // still in the Raft log for re-application.
-func (r *Replica) apply(ents []*raftpb.Entry) ([]fsm.Result, error) {
+func (r *Replica) apply(ents []*raftpb.Entry, out *Output) ([]fsm.Result, error) {
 	if len(ents) == 0 {
 		return nil, nil
 	}
-	var cs *raftpb.ConfState
+	var m *fsm.Membership
 	for _, e := range ents {
 		if e.GetIndex() <= r.fsm.Applied() {
 			continue
@@ -339,9 +363,32 @@ func (r *Replica) apply(ents []*raftpb.Entry) ([]fsm.Result, error) {
 		default:
 			continue
 		}
-		cs = r.rn.ApplyConfChange(cc)
+		if m == nil {
+			m = &fsm.Membership{URLs: map[uint64]string{}}
+		}
+		m.ConfState = r.rn.ApplyConfChange(cc)
+		v2 := cc.AsV2()
+		for _, ch := range v2.GetChanges() {
+			switch ch.GetType() {
+			case raftpb.ConfChangeAddNode:
+				if url := string(v2.GetContext()); url != "" {
+					m.URLs[ch.GetNodeId()] = url
+				}
+			case raftpb.ConfChangeRemoveNode:
+				m.URLs[ch.GetNodeId()] = ""
+				out.Removed = out.Removed || ch.GetNodeId() == r.cfg.ID
+			}
+		}
 	}
-	res, err := r.fsm.Apply(ents, cs, false)
+	if m != nil {
+		if out.Members == nil {
+			out.Members = map[uint64]string{}
+		}
+		for id, url := range m.URLs {
+			out.Members[id] = url
+		}
+	}
+	res, err := r.fsm.Apply(ents, m, false)
 	if err == nil {
 		r.applied = ents[len(ents)-1].GetIndex()
 	}

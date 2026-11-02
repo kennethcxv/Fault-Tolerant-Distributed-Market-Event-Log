@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -114,5 +115,92 @@ func TestRestartedFollowerCatchesUpViaSnapshot(t *testing.T) {
 	tc.converged(160)
 	if got := tc.nodes[victim].raft.rep.SnapshotIndex(); got == 0 {
 		t.Fatal("follower caught up without a snapshot")
+	}
+}
+
+// A node's disk is lost. It is removed, and a new node with a new id and an
+// empty directory joins with the cluster id, catches up and serves the same
+// log. The cluster accepts writes throughout.
+func TestReplaceNodeWithLostDisk(t *testing.T) {
+	tc := newTestClusterWith(t, 3, func(c *Config) { c.SnapshotEntries, c.CompactKeep = 20, 5 })
+	lead := tc.leader()
+	appendN(t, tc.client(), 2, 30)
+	tc.converged(60)
+	victim := lead%3 + 1
+	tc.stop(victim)
+	os.RemoveAll(tc.dirs[victim])
+
+	c := tc.client()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := c.RemoveMember(ctx, victim); err != nil {
+		t.Fatal(err)
+	}
+	var st api.Status
+	for {
+		var err error
+		st, err = c.Status(ctx, tc.peers[tc.leader()])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.ContainsFunc(st.Members, func(m api.Member) bool { return m.ID == victim }) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newID, newURL := uint64(4), "http://"+ln.Addr().String()
+	if err := c.AddMember(ctx, newID, newURL); err != nil {
+		t.Fatal(err)
+	}
+	peers := map[uint64]string{newID: newURL}
+	for id, url := range tc.peers {
+		if id != victim {
+			peers[id] = url
+		}
+	}
+	n, err := Start(Config{ID: newID, DataDir: t.TempDir(), Fsync: true, Peers: peers, Listener: ln, Join: true,
+		ClusterID: st.ClusterID, TickInterval: 10 * time.Millisecond, Logger: quiet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc.nodes[newID] = n
+	tc.peers[newID] = newURL
+	delete(tc.peers, victim)
+
+	for p := uint64(1); p <= 2; p++ {
+		if res, err := c.Append(ctx, batch(p, 31, "after replacement")); err != nil || res.Status != fsm.StatusAppended {
+			t.Fatalf("append after replacement: %+v %v", res, err)
+		}
+	}
+	tc.converged(62)
+	got, _ := c.Status(ctx, newURL)
+	var ids []uint64
+	for _, m := range got.Members {
+		ids = append(ids, m.ID)
+	}
+	if len(ids) != 3 || slices.Contains(ids, victim) || !slices.Contains(ids, newID) {
+		t.Fatalf("members after replacement: %v", ids)
+	}
+}
+
+// Raft would turn a second membership change into a no-op while the first is
+// pending; the engine must refuse it explicitly instead of answering
+// "proposed".
+func TestConcurrentMembershipChangeIsRefused(t *testing.T) {
+	tc := newTestCluster(t, 3)
+	n := tc.nodes[tc.leader()]
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := n.raft.changeMembership(ctx, 9, "http://127.0.0.1:1"); err != nil {
+		t.Fatal(err)
+	}
+	err := n.raft.changeMembership(ctx, 10, "http://127.0.0.1:2")
+	var apiErr *api.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != api.CodeOverloaded {
+		t.Fatalf("second change while the first was pending: %v", err)
 	}
 }

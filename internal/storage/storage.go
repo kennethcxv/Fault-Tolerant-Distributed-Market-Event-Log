@@ -10,7 +10,8 @@
 //	m/confstate        raftpb.ConfState as of m/applied
 //	m/p/<be64 id>      producer: be64 last seq, be64 last offset
 //	m/c/<name>         consumer checkpoint, be64 offset
-//	r/...              Raft log (raftlog.go)
+//	m/member/<be64 id> peer URL of a voter (replicated with membership)
+//	r/...              Raft log and node identity (raftlog.go)
 //
 // Keys from "e" up to "n" are the state machine; "r" keys are the Raft log.
 package storage
@@ -47,6 +48,7 @@ var (
 	keyConfState   = []byte("m/confstate")
 	prefixProducer = []byte("m/p/")
 	prefixConsumer = []byte("m/c/")
+	prefixMember   = []byte("m/member/")
 )
 
 func eventKey(offset uint64) []byte {
@@ -160,6 +162,19 @@ func (s *Store) LoadProducers() (map[uint64]Producer, error) {
 			LastSeq:    binary.BigEndian.Uint64(v),
 			LastOffset: binary.BigEndian.Uint64(v[8:]),
 		}
+		return nil
+	})
+	return out, err
+}
+
+// LoadMembers returns the replicated peer URLs by node id.
+func (s *Store) LoadMembers() (map[uint64]string, error) {
+	out := map[uint64]string{}
+	err := s.scanPrefix(prefixMember, func(k, v []byte) error {
+		if len(k) != len(prefixMember)+8 {
+			return fmt.Errorf("%w: member key %q", ErrCorrupt, k)
+		}
+		out[binary.BigEndian.Uint64(k[len(prefixMember):])] = string(v)
 		return nil
 	})
 	return out, err
@@ -306,6 +321,15 @@ func (b *Batch) SetProducer(id uint64, p Producer) error {
 
 func (b *Batch) SetConsumer(name string, offset uint64) error {
 	return b.setUint64(append(append([]byte(nil), prefixConsumer...), name...), offset)
+}
+
+// SetMember records a voter's URL; an empty URL removes the member.
+func (b *Batch) SetMember(id uint64, url string) error {
+	key := binary.BigEndian.AppendUint64(append([]byte(nil), prefixMember...), id)
+	if url == "" {
+		return b.b.Delete(key, nil)
+	}
+	return b.b.Set(key, []byte(url), nil)
 }
 
 func (b *Batch) SetConfState(cs *raftpb.ConfState) error {

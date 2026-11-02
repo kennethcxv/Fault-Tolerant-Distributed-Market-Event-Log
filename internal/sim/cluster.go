@@ -56,11 +56,13 @@ type Options struct {
 }
 
 type Node struct {
-	ID    uint64
-	Up    bool
-	fs    *vfs.MemFS
-	store *storage.Store
-	rep   *replica.Replica
+	ID      uint64
+	Up      bool
+	Removed bool // removed from the cluster by a membership change
+	join    bool
+	fs      *vfs.MemFS
+	store   *storage.Store
+	rep     *replica.Replica
 }
 
 func (n *Node) Replica() *replica.Replica { return n.rep }
@@ -105,12 +107,13 @@ func New(opts Options) (*Cluster, error) {
 	return c, nil
 }
 
-func (c *Cluster) peers() []uint64 {
-	ids := make([]uint64, len(c.Nodes))
-	for i, n := range c.Nodes {
-		ids[i] = n.ID
+// peers is the bootstrap membership: the nodes created by New.
+func (c *Cluster) peers() map[uint64]string {
+	out := map[uint64]string{}
+	for id := uint64(1); id <= uint64(c.opts.Nodes); id++ {
+		out[id] = fmt.Sprintf("sim://%d", id)
 	}
-	return ids
+	return out
 }
 
 func (c *Cluster) open(n *Node) error {
@@ -124,7 +127,7 @@ func (c *Cluster) open(n *Node) error {
 		return fmt.Errorf("node %d: %w", n.ID, err)
 	}
 	rep, err := replica.Open(replica.Config{
-		ID: n.ID, Peers: c.peers(), ElectionTick: 10, HeartbeatTick: 1,
+		ID: n.ID, Peers: c.peers(), Join: n.join, ElectionTick: 10, HeartbeatTick: 1,
 		Sync: !c.opts.NoSync, SnapshotEntries: c.opts.SnapshotEntries, CompactKeep: c.opts.CompactKeep,
 		Logger: c.opts.Logger.With("node", n.ID),
 	}, st, f)
@@ -221,6 +224,13 @@ func (c *Cluster) processReady() error {
 				if c.opts.OnRoleSet != nil {
 					c.opts.OnRoleSet(n.ID, *out.SoftState)
 				}
+			}
+			if out.Removed {
+				// A removed node stops, as the server does.
+				c.Tracef("node %d: removed from the cluster; stopping", n.ID)
+				n.store.Close()
+				n.Up, n.Removed, n.rep, n.store = false, true, nil, nil
+				break
 			}
 			if out.SnapshotInstalled > 0 {
 				c.Installs[n.ID]++
@@ -390,10 +400,42 @@ func (c *Cluster) CrashTo(id uint64, disk *vfs.MemFS) {
 // FS exposes a node's filesystem so tests can capture crash clones.
 func (n *Node) FS() *vfs.MemFS { return n.fs }
 
+// AddNode creates a new, empty node that joins instead of bootstrapping.
+// It takes no part until a membership change adds it.
+func (c *Cluster) AddNode() (*Node, error) {
+	n := &Node{ID: uint64(len(c.Nodes) + 1), fs: vfs.NewCrashableMem(), join: true}
+	c.Nodes = append(c.Nodes, n)
+	c.Tracef("new node %d (joining)", n.ID)
+	return n, c.open(n)
+}
+
+// ChangeMembership proposes adding (url != "") or removing a voter through
+// the current leader.
+func (c *Cluster) ChangeMembership(id uint64, url string) error {
+	l := c.Leader()
+	if l == nil {
+		return fmt.Errorf("no leader")
+	}
+	cc := &raftpb.ConfChange{Type: raftpb.ConfChangeRemoveNode.Enum(), NodeId: new(id)}
+	if url != "" {
+		cc = &raftpb.ConfChange{Type: raftpb.ConfChangeAddNode.Enum(), NodeId: new(id), Context: []byte(url)}
+	}
+	c.Tracef("propose %s of node %d via leader %d", cc.GetType(), id, l.ID)
+	return l.rep.ProposeConfChange(cc)
+}
+
+// Voters is the leader's current voter set.
+func (c *Cluster) Voters() []uint64 {
+	if l := c.Leader(); l != nil {
+		return l.rep.FSM().ConfState().GetVoters()
+	}
+	return nil
+}
+
 // Restart reopens a crashed node from what its disk retained.
 func (c *Cluster) Restart(id uint64) error {
 	n := c.Node(id)
-	if n.Up {
+	if n.Up || n.Removed {
 		return nil
 	}
 	c.Tracef("restart node %d", id)

@@ -153,7 +153,7 @@ func TestStateSurvivesReopen(t *testing.T) {
 	applyOne(t, f, checkpointCmd("c", 1))
 	cs := &raftpb.ConfState{Voters: []uint64{1, 2, 3}}
 	idx := f.applied + 1
-	if _, err := f.Apply([]*raftpb.Entry{{Index: &idx}}, cs, true); err != nil {
+	if _, err := f.Apply([]*raftpb.Entry{{Index: &idx}}, &Membership{ConfState: cs, URLs: map[uint64]string{2: "http://b"}}, true); err != nil {
 		t.Fatal(err)
 	}
 	st.Close()
@@ -163,8 +163,8 @@ func TestStateSurvivesReopen(t *testing.T) {
 	if g.Applied() != 3 || g.LastOffset() != 2 || g.consumers["c"] != 1 || g.producers[1].LastSeq != 2 {
 		t.Fatalf("reloaded: applied=%d last=%d consumers=%v producers=%v", g.Applied(), g.LastOffset(), g.consumers, g.producers)
 	}
-	if len(g.ConfState().GetVoters()) != 3 {
-		t.Fatalf("confstate %v", g.ConfState())
+	if len(g.ConfState().GetVoters()) != 3 || g.Members()[2] != "http://b" {
+		t.Fatalf("confstate %v members %v", g.ConfState(), g.Members())
 	}
 	if r := applyOne(t, g, appendCmd(1, 2, "b")); r.Status != StatusDuplicate {
 		t.Fatalf("dedup state lost across restart: %+v", r)

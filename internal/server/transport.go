@@ -53,6 +53,7 @@ func clusterID(peers map[uint64]string) string {
 // after raft creates it, and protobuf-go allows concurrent marshalling of an
 // unmodified message (the race detector runs over the cluster tests).
 type transport struct {
+	ctx         context.Context
 	id          uint64
 	cluster     string
 	hc          *http.Client
@@ -64,14 +65,15 @@ type transport struct {
 }
 
 type peerSender struct {
-	id  uint64
-	url string
-	ch  chan *raftpb.Message
+	id     uint64
+	url    string
+	ch     chan *raftpb.Message
+	cancel context.CancelFunc
 }
 
-func newTransport(id uint64, peers map[uint64]string, log *slog.Logger, f *faults, unreachable func(uint64)) *transport {
+func newTransport(id uint64, cluster string, peers map[uint64]string, log *slog.Logger, f *faults, unreachable func(uint64)) *transport {
 	t := &transport{
-		id: id, cluster: clusterID(peers), log: log, faults: f, unreachable: unreachable,
+		id: id, cluster: cluster, log: log, faults: f, unreachable: unreachable,
 		hc: &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{MaxIdleConnsPerHost: 4}},
 		// Generous, but finite: a stalled receiver must not pin the leader's
 		// Pebble snapshot and keep the follower in snapshot state forever.
@@ -87,9 +89,35 @@ func newTransport(id uint64, peers map[uint64]string, log *slog.Logger, f *fault
 }
 
 func (t *transport) start(ctx context.Context) {
+	t.ctx = ctx
 	for _, p := range t.peers {
-		go t.run(ctx, p)
+		var pctx context.Context
+		pctx, p.cancel = context.WithCancel(ctx)
+		go t.run(pctx, p)
 	}
+}
+
+// setPeer adds, re-addresses (url != "") or removes (url == "") a peer after
+// a membership change. Called on the Raft loop goroutine after start.
+func (t *transport) setPeer(id uint64, url string) {
+	if id == t.id {
+		return
+	}
+	if p := t.peers[id]; p != nil {
+		if p.url == url {
+			return
+		}
+		p.cancel()
+		delete(t.peers, id)
+	}
+	if url == "" {
+		return
+	}
+	p := &peerSender{id: id, url: url, ch: make(chan *raftpb.Message, peerQueue)}
+	var pctx context.Context
+	pctx, p.cancel = context.WithCancel(t.ctx)
+	t.peers[id] = p
+	go t.run(pctx, p)
 }
 
 // send queues messages without blocking.

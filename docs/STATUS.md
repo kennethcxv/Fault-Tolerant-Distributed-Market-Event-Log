@@ -58,10 +58,17 @@ milestone.
 | Benchmarks real and reproducible | `bench/` scripts, raw results, `docs/benchmarks.md` |
 | Fresh clone works | verified 2026-11-02 at 8663d34 |
 
+## Added after milestone 10
+
+- Membership changes (D10): `mlogctl member list/add/remove`, `--join`,
+  `--cluster-id`, stored cluster ID, address book from the replicated log,
+  removed nodes stop. Tests: simulator (20 seeds), HTTP, multi-process,
+  `scripts/demo-replace-node.sh`.
+
 ## Open items (not required, known limitations)
 
-- Runtime membership change: add or remove a node, to replace one whose disk
-  lost data (D10).
+- Learners and joint consensus. Membership changes are single-voter, which
+  is enough to replace a failed node (D10).
 - Log retention and truncation; tiered snapshots instead of shipping the whole
   event store (D6).
 - Spool file rotation on the engine host.

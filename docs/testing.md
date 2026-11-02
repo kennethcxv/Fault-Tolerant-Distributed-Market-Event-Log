@@ -33,6 +33,7 @@ HTML visualization of the history to `$MLOG_SIM_ARTIFACTS` (default
 | Node restart with persisted state | `sim.TestWholeClusterPowerLoss`, `sim.TestRandomCrashRestartWithTornWrites`, `server.TestLeaderStopElectsNewLeaderAndOldLeaderCatchesUp` |
 | Snapshot installation and replay | `sim.TestLaggingFollowerCatchesUpViaSnapshot`, `sim.TestCrashDuringSnapshotInstall`, `server.TestRestartedFollowerCatchesUpViaSnapshot` |
 | Corrupted or truncated storage | `storage.TestReadDetectsCorruption`, `sim.TestTruncatedRaftLogIsRefusedAtStartup`, `server.TestCorruptRecordOnFollowerStopsOnlyThatNode`, `server.TestTruncatedWALOnFollowerIsDetected` |
+| Replacing a node whose disk was lost | `sim.TestReplaceFailedNode` (20 seeds, half with lossy networks), `sim.TestRemoveLeader`, `server.TestReplaceNodeWithLostDisk`, `e2e.TestReplaceDeadNodeProcess` |
 | Consumer restart from checkpoint | `replay.TestConsumerRestartsReachSameState` (100+ random kills, torn temp files), `e2e.TestConsumerProcessSurvivesSIGKILL` (30 SIGKILLs of `mlogctl consume`), `replay.TestConsumerRebuildsWhenLocalStateIsLost`, `replay.TestInterruptedReplayResumesToSameHash` |
 
 ## Invariants
@@ -86,4 +87,8 @@ against the simulator, one at a time. None of this runs in CI.
 - The multi-process test runs on one machine over loopback. Its partitions are
   dropped at the application layer, and nothing simulates clock skew or
   packet reordering in the kernel.
+- Porcupine's search is exponential in the worst case. Checks normally take
+  well under a second, but one crash-at-send history once needed about 85 s
+  under `-race`. The budget is 3 minutes per check, and a timeout fails the
+  test.
 - No Jepsen run and no formal verification.

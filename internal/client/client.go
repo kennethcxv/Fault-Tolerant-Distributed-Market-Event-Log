@@ -68,11 +68,27 @@ func (c *Client) Checkpoint(ctx context.Context, consumer string, offset uint64)
 // redirects. Tests use it to record exact client histories.
 func (c *Client) AppendOnce(ctx context.Context, endpoint string, req api.AppendRequest) (fsm.Result, error) {
 	var res fsm.Result
-	err := c.post(ctx, endpoint, "/v1/append", req, &res)
+	err := c.do(ctx, http.MethodPost, endpoint, "/v1/append", req, &res)
 	return res, err
 }
 
+// AddMember proposes adding a voter; RemoveMember proposes removing one. Both
+// return once the leader has proposed the change. Watch Status for it.
+func (c *Client) AddMember(ctx context.Context, id uint64, url string) error {
+	var out struct{ Status string }
+	return c.write(ctx, "/v1/members", api.MemberRequest{ID: id, URL: url}, &out)
+}
+
+func (c *Client) RemoveMember(ctx context.Context, id uint64) error {
+	var out struct{ Status string }
+	return c.writeMethod(ctx, http.MethodDelete, fmt.Sprintf("/v1/members/%d", id), nil, &out)
+}
+
 func (c *Client) write(ctx context.Context, path string, body, out any) error {
+	return c.writeMethod(ctx, http.MethodPost, path, body, out)
+}
+
+func (c *Client) writeMethod(ctx context.Context, method, path string, body, out any) error {
 	backoff := 10 * time.Millisecond
 	// mayHaveApplied records whether any attempt could have taken effect; if
 	// so, giving up must report outcome_unknown rather than the last error.
@@ -80,7 +96,7 @@ func (c *Client) write(ctx context.Context, path string, body, out any) error {
 	var lastErr error
 	for attempt := 0; ; attempt++ {
 		target := c.target()
-		err := c.post(ctx, target, path, body, out)
+		err := c.do(ctx, method, target, path, body, out)
 		if err == nil {
 			return nil
 		}
@@ -281,14 +297,15 @@ func (c *Client) get(ctx context.Context, base, path string) (*http.Response, er
 	return resp, nil
 }
 
-// post sends one request. Responses carrying a state-machine result (even a
-// rejection such as sequence_gap) decode into out; API errors return *api.Error.
-func (c *Client) post(ctx context.Context, base, path string, body, out any) error {
+// do sends one request. Responses carrying a "status" (a state-machine
+// result, even a rejection such as sequence_gap) decode into out; API errors
+// return *api.Error.
+func (c *Client) do(ctx context.Context, method, base, path string, body, out any) error {
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(buf))
+	req, err := http.NewRequestWithContext(ctx, method, base+path, bytes.NewReader(buf))
 	if err != nil {
 		return err
 	}

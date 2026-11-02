@@ -16,6 +16,7 @@ import (
 //	r/snap            raftpb.Snapshot (metadata; the data is the state machine)
 //	r/e/<be64 index>  raftpb.Entry
 var (
+	keyClusterID    = []byte("r/cluster")
 	keyHardState    = []byte("r/hs")
 	keySnapshot     = []byte("r/snap")
 	prefixRaftEntry = []byte("r/e/")
@@ -23,6 +24,21 @@ var (
 
 func raftEntryKey(index uint64) []byte {
 	return binary.BigEndian.AppendUint64(append([]byte(nil), prefixRaftEntry...), index)
+}
+
+// ClusterID returns the cluster this node belongs to, or "" before the node
+// has joined one. It is node identity, so it lives with the Raft state and is
+// never replaced by a snapshot.
+func (s *Store) ClusterID() (string, error) {
+	v, err := s.get(keyClusterID)
+	if errors.Is(err, ErrNotFound) {
+		return "", nil
+	}
+	return string(v), err
+}
+
+func (s *Store) SetClusterID(id string) error {
+	return s.db.Set(keyClusterID, []byte(id), pebble.Sync)
 }
 
 // RaftState is everything etcd-io/raft needs persisted, as loaded at startup.

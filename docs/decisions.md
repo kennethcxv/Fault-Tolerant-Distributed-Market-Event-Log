@@ -143,16 +143,39 @@ possibly not the newest one. Linearizable reads use ReadIndex, which costs a
 heartbeat round. Lease reads were rejected because they depend on bounded clock
 drift, which §4 does not assume.
 
-## D10. Static membership
+## D10. Membership: bootstrap from flags, then one voter change at a time
 
-The cluster's 3 or 5 members are fixed at bootstrap. Runtime add and remove is
-not implemented.
+Originally static: 3 or 5 members, fixed at bootstrap. That left an
+operational gap. A node whose disk lost acknowledged data must not rejoin
+under its old ID with empty storage, because it has forgotten its vote and
+could vote twice in one term, so it couldn't be replaced at all.
 
-The consequence matters. A node that loses or corrupts its disk must not rejoin
-under its old ID with empty storage: it has forgotten its vote and could vote
-twice in one term. The safe procedure is to remove it and add a fresh member,
-which needs a membership change. Until that exists, such a node stays out and
-the cluster runs with one less failure of headroom. **Open question for review.**
+Membership changes were added after milestone 10:
+
+- `mlogctl member add|remove` propose single-voter changes through the
+  leader.
+- Each voter's URL travels in the conf change and is stored with the state
+  machine (`m/member/<id>`). Restarts and snapshot installs therefore carry
+  the address book.
+- A replacement joins with `mlogd --join --cluster-id`.
+- The engine refuses a second change while one is pending. Raft would
+  silently turn it into a no-op.
+- A removed node stops, and a removed leader steps down.
+
+Procedure for a lost disk: remove the dead node first, then add a new node
+under a new ID. With one node already dead, removing it doesn't reduce
+failure headroom, and the two healthy nodes keep quorum while the newcomer
+catches up by snapshot.
+
+Not implemented:
+
+- learners (non-voting catch-up before promotion);
+- joint consensus for changing several voters at once.
+
+Tests: `sim.TestReplaceFailedNode` (20 seeds, half with lossy networks),
+`sim.TestRemoveLeader`, `server.TestReplaceNodeWithLostDisk`,
+`server.TestConcurrentMembershipChangeIsRefused`,
+`e2e.TestReplaceDeadNodeProcess`, `scripts/demo-replace-node.sh`.
 
 ## D11. HTTP/1.1 for clients and peers
 
@@ -209,11 +232,11 @@ Rejected:
 Cost: the spool host is a single point of failure until the backlog drains, and
 there is one more process to run.
 
-## D15. Reject peer traffic from nodes started with a different peer list
+## D15. Reject peer traffic from other clusters
 
-Added in milestone 4. Each node hashes its `--peers` map into a cluster
-fingerprint. Every peer request carries it, and a node rejects requests whose
-fingerprint differs from its own (HTTP 409, logged as an error).
+Added in milestone 4. A bootstrapping node fingerprints its initial `--peers`
+map into a cluster ID. Every peer request carries it, and a node rejects
+requests whose ID differs from its own (HTTP 409, logged as an error).
 
 Bootstrap membership comes from that flag, so a node started with a different
 list would form a different initial configuration. The simulator showed what
@@ -221,6 +244,10 @@ that looks like: a harness bug bootstrapped nodes with peer sets {1}, {1,2}
 and {1,2,3}, and raft panicked when the leader decided a follower needed a
 snapshot that didn't exist. etcd guards against the same mistake with a
 cluster ID.
+
+Since membership changes were added, the ID is stored on first start
+(`r/cluster`), so restarts don't depend on a `--peers` flag that goes stale.
+A joining node is given it explicitly with `--cluster-id`.
 
 ## D16. The leader sends before persisting
 

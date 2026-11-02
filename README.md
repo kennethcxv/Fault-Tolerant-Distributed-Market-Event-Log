@@ -86,6 +86,7 @@ bin/mlogctl replay                              # rebuild the order book and pri
 bin/mlogctl consume --name risk --to 50000      # checkpointing consumer
 scripts/cluster.sh kill 1; scripts/cluster.sh restart 1     # SIGKILL a node and bring it back
 bin/mlogctl fault isolate 2; bin/mlogctl fault heal          # partition a node via /debug/fault
+bin/mlogctl member list                         # cluster id and voters; member add/remove replace a node
 scripts/cluster.sh wipe
 ```
 
@@ -97,6 +98,8 @@ Demonstrations:
   continues.
 - `scripts/demo-project1.sh`: a C++ engine writes 1M events through the spool while the
   leader is killed.
+- `scripts/demo-replace-node.sh`: a node's disk is deleted; it is removed and a new node
+  joins and catches up by snapshot while writes continue.
 
 Metrics are served at `/metrics` (Prometheus). They include:
 
@@ -155,9 +158,8 @@ This is testing, not formal verification.
 
 ## Limitations
 
-- **Static membership.** Clusters are 3 or 5 nodes, fixed at bootstrap. A node whose disk
-  lost acknowledged data is detected and stopped, but it can't be replaced by a new member
-  ([D10](docs/decisions.md)).
+- **Membership changes one voter at a time.** There are no learners and no joint consensus
+  ([D10](docs/decisions.md)). A dead node is replaced by removing it and adding a new ID.
 - **One Raft group, and the log is never truncated.** Throughput is bounded by one leader.
   A snapshot ships the whole event store, so install cost grows with the log (D6).
 - **The append path is HTTP/JSON with base64 payloads.** It costs CPU that hasn't been

@@ -454,3 +454,39 @@ Findings, in the order they happened:
 - A Porcupine check once timed out (60 s) under `-race` on a crash-at-send
   history. Typical checks take under 1 s. The budget was raised to 3 minutes;
   a timeout still fails the test.
+
+## 2026-11-02 — After milestone 10: membership changes
+
+Why: D10 left no way to replace a node whose disk lost data. Restarting the
+old ID with an empty disk is unsafe (it has forgotten its vote), so a cluster
+that lost one node's disk was stuck one failure closer to unavailability.
+
+Done:
+
+- Single-voter add and remove through the leader. Member URLs ride in the
+  conf change and are stored atomically with the applied index.
+- `--join` for a node with an empty data directory. The cluster ID is stored
+  at bootstrap and given to joining nodes.
+- The transport adds and removes peers at runtime. A removed node stops.
+- `mlogctl member list/add/remove`. `add` prints the command to start the new
+  node.
+- Tests:
+  - simulator replacement (20 seeds, half with loss/dup/delay) and leader
+    removal;
+  - in-process HTTP replacement;
+  - the pending-change refusal;
+  - multi-process replacement with real `--join`;
+  - a demo script.
+
+Found along the way:
+
+- Raft silently turns a second conf change into a no-op while one is pending,
+  but the API was answering "proposed". It now refuses with an explicit
+  error.
+- My first HTTP test tried to show that refusal by proposing a second change
+  right after the first. The first had already applied, so the test added a
+  real bogus member and then failed on the member count. The refusal is now
+  tested directly against the engine with back-to-back calls.
+- The demo script died silently on `mlogctl status | head -4`. `head` closing
+  the pipe is fatal under `pipefail`, the same mistake as in the benchmark
+  script.
