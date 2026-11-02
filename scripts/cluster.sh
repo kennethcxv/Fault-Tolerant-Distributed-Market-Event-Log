@@ -14,6 +14,9 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# MLOG_BIN points at prebuilt binaries (benchmarks of older commits); by
+# default start builds bin/ from the working tree.
+BIN=${MLOG_BIN:-$ROOT/bin}
 DIR=${MLOG_CLUSTER_DIR:-$ROOT/.cluster}
 BASE_PORT=${MLOG_BASE_PORT:-7001}
 
@@ -29,7 +32,7 @@ start_node() {
   if running "$id"; then echo "node $id already running"; return; fi
   mkdir -p "$DIR/n$id"
   # shellcheck disable=SC2086
-  nohup "$ROOT/bin/mlogd" --id "$id" --listen "127.0.0.1:$(port "$id")" --data "$DIR/n$id" \
+  nohup "$BIN/mlogd" --id "$id" --listen "127.0.0.1:$(port "$id")" --data "$DIR/n$id" \
     --peers "$(peers)" ${MLOGD_FLAGS:-} >>"$DIR/n$id.log" 2>&1 &
   echo $! >"$DIR/n$id.pid"
   echo "node $id started (pid $!, http://127.0.0.1:$(port "$id"), log $DIR/n$id.log)"
@@ -50,17 +53,17 @@ case "${1:-}" in
       echo "existing cluster in $DIR has $(size) nodes; run wipe first" >&2; exit 1
     fi
     mkdir -p "$DIR" && echo "$n" >"$DIR/size"
-    (cd "$ROOT" && go build -o bin/ ./cmd/...)
+    [ -n "${MLOG_BIN:-}" ] || (cd "$ROOT" && go build -o bin/ ./cmd/...)
     for i in $(seq 1 "$n"); do start_node "$i"; done
     for _ in $(seq 1 100); do
-      if leader=$("$ROOT/bin/mlogctl" --endpoints "$(endpoints)" --timeout 1s leader 2>/dev/null); then
+      if leader=$("$BIN/mlogctl" --endpoints "$(endpoints)" --timeout 1s leader 2>/dev/null); then
         echo "leader is node $leader"; break
       fi
       sleep 0.1
     done
     echo "export MLOG_ENDPOINTS=$(endpoints)"
     ;;
-  status) "$ROOT/bin/mlogctl" --endpoints "$(endpoints)" status ;;
+  status) "$BIN/mlogctl" --endpoints "$(endpoints)" status ;;
   kill) signal_node KILL "$2" ;;
   stop) signal_node TERM "$2" ;;
   restart) start_node "$2" ;;
