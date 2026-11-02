@@ -41,3 +41,31 @@ Not done: no code exists yet, so none of the guarantees has been tested.
 
 Open questions for review: D10 (static membership and replacing a node with a
 corrupted disk), and the license.
+
+## 2026-11-02 — Milestone 2: single-node append-only storage
+
+Done:
+
+- Event envelope (`internal/event`). Tests: round-trip property, every
+  single-bit flip of a record is rejected, every truncated prefix is reported
+  as truncated rather than corrupt, and a fuzz target.
+- Storage layer (`internal/storage`). It reads only verified records: a gap, a
+  misplaced record or a CRC failure below the applied offset is `ErrCorrupt`.
+- State machine (`internal/fsm`): producer dedup with strict contiguity, dense
+  offsets, monotonic checkpoints. Malformed commands are rejected the same way
+  on every replica instead of crashing it.
+- Standalone server with group commit (one fsync per drained queue), HTTP
+  client and CLI. On a corrupt read the node fails stop; it then answers
+  `node_failed` to everything except `/v1/status`.
+
+Bug found by the crash test: `TestCrashLeavesAtomicPrefixOfBatches` first
+failed on 8 of 20 seeds, and each failure lost the entire database, even
+batches committed with `Sync`. Root cause: `storage.Open` created the data
+directory but never fsynced its parent. A new directory entry isn't durable
+until its parent is synced, so a crash soon after first start could lose the
+directory and everything in it. Pebble syncs the directories it creates, but
+not the parents of its own data directory. Fixed by `mkdirAllDurable`, which
+fsyncs every ancestor. This would also happen on real ext4/APFS after power
+loss; it isn't specific to the simulator.
+
+Not yet measured: throughput and latency. Nothing about performance is claimed.
