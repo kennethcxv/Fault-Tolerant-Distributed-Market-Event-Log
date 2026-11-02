@@ -1,0 +1,6 @@
+producers=8 batch=1000 events/producer=100000 elapsed=4.032s
+appended=800000 duplicates=0 requests=800 throughput=198396 events/s
+append latency p50=5.408083ms p90=94.243875ms p99=367.72025ms p99.9=423.882167ms max=423.882167ms
+{"disk_usage_bytes":56930442,"wal_logical_bytes":99772252,"wal_bytes_written":99820465,"flushed_bytes":141332374,"compacted_bytes":57307474,"write_amp":1.9899711747485849,"tables":16,"compactions":6}
+
+disk_kb_node1 59132

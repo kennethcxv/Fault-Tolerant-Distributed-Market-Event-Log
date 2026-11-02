@@ -1,0 +1,30 @@
+goos: linux
+goarch: amd64
+pkg: github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/fsm
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkApply/sync=true/batch=1-4         	   10000	    243314 ns/op	      4111 events/s
+BenchmarkApply/sync=true/batch=10-4        	    9238	    254067 ns/op	     39954 events/s
+BenchmarkApply/sync=true/batch=100-4       	   11594	    193827 ns/op	    516577 events/s
+BenchmarkApply/sync=true/batch=1000-4      	    3038	    911268 ns/op	   1109296 events/s
+BenchmarkApply/sync=false/batch=1-4        	  824028	      3530 ns/op	    285484 events/s
+BenchmarkApply/sync=false/batch=10-4       	  269701	     10613 ns/op	    958194 events/s
+BenchmarkApply/sync=false/batch=100-4      	   28934	     83545 ns/op	   1224588 events/s
+BenchmarkApply/sync=false/batch=1000-4     	    3910	    994145 ns/op	   1017874 events/s
+PASS
+ok  	github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/fsm	24.743s
+goos: linux
+goarch: amd64
+pkg: github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/replay
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkBookApply-4         	14681994	       160.2 ns/op	   6242542 events/s
+BenchmarkReplayFromStore-4   	      39	  52909566 ns/op	   1890018 events/s
+PASS
+ok  	github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/replay	4.855s
+goos: linux
+goarch: amd64
+pkg: github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/event
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkEncode-4   	100000000	        22.64 ns/op
+BenchmarkDecode-4   	123321452	        19.60 ns/op
+PASS
+ok  	github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/event	6.678s
