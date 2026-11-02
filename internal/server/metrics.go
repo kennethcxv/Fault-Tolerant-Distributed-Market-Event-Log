@@ -33,6 +33,7 @@ type metrics struct {
 	failed        prometheus.Gauge
 	snapshotsSent *prometheus.CounterVec
 	snapshots     *prometheus.CounterVec
+	groupSize     prometheus.Histogram
 
 	lastLeader uint64
 }
@@ -66,12 +67,14 @@ func newMetrics(f *fsm.FSM, st *storage.Store) *metrics {
 	m.peerLag = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "mlog_replication_lag_entries",
 		Help: "Leader only: leader last index minus the peer's match index."}, []string{"peer"})
 	m.failed = g("mlog_node_failed", "1 once the node stopped serving after a storage error or corruption.")
+	m.groupSize = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "mlog_commit_group_size",
+		Help: "Client commands sharing one persistence round (group commit).", Buckets: prometheus.ExponentialBuckets(1, 2, 11)})
 	m.snapshotsSent = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "mlog_snapshots_sent_total",
 		Help: "Snapshot streams sent to followers, by success."}, []string{"ok"})
 	m.snapshots = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "mlog_snapshots_total",
 		Help: "Snapshots taken locally (created) or received from the leader (installed)."}, []string{"kind"})
 	m.reg.MustRegister(m.term, m.isLeader, m.commitIndex, m.leaderChanges, m.elections, m.proposals, m.results,
-		m.events, m.commitLatency, m.walSync, m.persist, m.apply, m.peerLag, m.failed, m.snapshotsSent, m.snapshots,
+		m.events, m.commitLatency, m.walSync, m.persist, m.apply, m.peerLag, m.failed, m.snapshotsSent, m.snapshots, m.groupSize,
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "mlog_applied_index", Help: "State machine applied index."},
 			func() float64 { return float64(f.Applied()) }),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "mlog_last_offset", Help: "Last event offset in the local log."},

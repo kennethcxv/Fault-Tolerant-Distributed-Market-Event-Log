@@ -126,9 +126,11 @@ func (e *raftEngine) run(ctx context.Context) (err error) {
 			// Take everything already queued so it shares one Ready (and
 			// one fsync). Only this goroutine receives, so len is safe.
 			e.handleProposal(p)
-			for n := len(e.proposals); n > 0; n-- {
+			n := len(e.proposals)
+			for range n {
 				e.handleProposal(<-e.proposals)
 			}
+			e.m.groupSize.Observe(float64(n + 1))
 		case done := <-e.reads:
 			e.readIndex(done)
 		case r := <-e.reports:
@@ -149,11 +151,10 @@ func (e *raftEngine) run(ctx context.Context) (err error) {
 
 func (e *raftEngine) processReady(ctx context.Context) error {
 	for e.rep.HasReady() {
-		out, err := e.rep.Ready()
+		out, err := e.rep.Ready(func(msgs []*raftpb.Message) { e.sendMessages(ctx, msgs) })
 		if err != nil {
 			return err
 		}
-		e.sendMessages(ctx, out.Messages)
 		e.m.observeReady(&out)
 		for _, r := range out.Results {
 			e.m.observeResult(r)

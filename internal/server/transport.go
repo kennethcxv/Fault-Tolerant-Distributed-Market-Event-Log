@@ -47,6 +47,11 @@ func clusterID(peers map[uint64]string) string {
 // goroutine and a bounded queue: messages to a peer stay in order, and a slow
 // or dead peer never blocks the Raft loop. Raft tolerates loss, so a full
 // queue or failed request drops messages and reports the peer unreachable.
+//
+// Messages are marshalled on the peer goroutines while the Raft loop may be
+// persisting the same entries. That is safe because nothing mutates an entry
+// after raft creates it, and protobuf-go allows concurrent marshalling of an
+// unmodified message (the race detector runs over the cluster tests).
 type transport struct {
 	id          uint64
 	cluster     string

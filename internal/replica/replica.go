@@ -6,7 +6,7 @@
 // For each Ready it follows the library's contract (design §7):
 //
 //  1. persist the snapshot, entries and hard state, fsynced when MustSync;
-//  2. hand the messages to the caller, which sends them only after (1);
+//  2. send the messages after (1), except that a leader sends first;
 //  3. install the snapshot and apply committed entries;
 //  4. Advance.
 package replica
@@ -45,8 +45,6 @@ type Config struct {
 
 // Output is what one Ready produced for the caller.
 type Output struct {
-	// Messages must be sent after Ready returns (state is persisted by then).
-	Messages []*raftpb.Message
 	// Results of commands applied on this node, in log order. A result's
 	// ReqID matches the proposer's request only on the proposing node.
 	Results []fsm.Result
@@ -76,6 +74,8 @@ type Replica struct {
 	fsm   *fsm.FSM
 	soft  raft.SoftState
 	reads []raft.ReadState
+	// term and vote as last persisted, to tell whether a Ready changes them.
+	term, vote uint64
 	// applied is the last index raft handed us (entries or snapshot). The
 	// state machine's own applied index never lags it after Ready returns.
 	applied uint64
@@ -177,7 +177,8 @@ func Open(cfg Config, st *storage.Store, f *fsm.FSM) (*Replica, error) {
 			return nil, err
 		}
 	}
-	r := &Replica{cfg: cfg, log: log, rn: rn, ms: ms, store: st, fsm: f, applied: applied}
+	r := &Replica{cfg: cfg, log: log, rn: rn, ms: ms, store: st, fsm: f, applied: applied,
+		term: rs.HardState.GetTerm(), vote: rs.HardState.GetVote()}
 	r.soft = rn.BasicStatus().SoftState
 	log.Info("replica opened", "fresh", fresh, "applied", f.Applied(), "commit", rs.HardState.GetCommit(),
 		"term", rs.HardState.GetTerm(), "snapshot", snapIndex, "log_entries", len(rs.Entries))
@@ -213,9 +214,17 @@ func (r *Replica) ReportSnapshot(id uint64, ok bool) {
 	r.rn.ReportSnapshot(id, status)
 }
 
-// Ready processes one raft.Ready. Call it while HasReady is true. An error
-// means storage failed and the replica must not be used again.
-func (r *Replica) Ready() (Output, error) {
+// Ready processes one raft.Ready, calling send with its messages. Call it
+// while HasReady is true. An error means storage failed and the replica
+// must not be used again.
+//
+// A leader sends before persisting, so its disk write overlaps the
+// followers' (raft thesis §10.2.1; etcd does the same, and the library's
+// README allows it). It is safe because etcd-io/raft counts the leader's own
+// acknowledgment only when Advance delivers it, after persistence, so a
+// commit still needs a durable majority. A Ready that changes term or vote
+// waits: those must be on disk before anything is sent.
+func (r *Replica) Ready(send func([]*raftpb.Message)) (Output, error) {
 	rd := r.rn.Ready()
 	var out Output
 	if rd.SoftState != nil && *rd.SoftState != r.soft {
@@ -223,14 +232,25 @@ func (r *Replica) Ready() (Output, error) {
 		s := r.soft
 		out.SoftState = &s
 	}
+	hs := rd.HardState
+	termOrVote := hs != nil && (hs.GetTerm() != r.term || hs.GetVote() != r.vote)
+	early := r.soft.RaftState == raft.StateLeader && !termOrVote
+	if early {
+		send(rd.Messages)
+	}
 	start := time.Now()
 	synced, err := r.persist(&rd)
 	if err != nil {
 		return out, fmt.Errorf("replica: persist raft state: %w", err)
 	}
 	out.PersistTime, out.Synced = time.Since(start), synced
-	out.Commit = rd.HardState.GetCommit()
-	out.Messages = rd.Messages
+	out.Commit = hs.GetCommit()
+	if hs != nil {
+		r.term, r.vote = hs.GetTerm(), hs.GetVote()
+	}
+	if !early {
+		send(rd.Messages)
+	}
 
 	start = time.Now()
 	if !raft.IsEmptySnap(rd.Snapshot) {

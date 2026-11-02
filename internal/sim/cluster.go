@@ -184,7 +184,8 @@ func (c *Cluster) Step() error {
 func (c *Cluster) processReady() error {
 	for _, n := range c.Nodes {
 		for n.Up && n.rep.HasReady() {
-			out, err := n.rep.Ready()
+			var msgs []*raftpb.Message
+			out, err := n.rep.Ready(func(m []*raftpb.Message) { msgs = m })
 			if err != nil {
 				return fmt.Errorf("node %d: %w", n.ID, err)
 			}
@@ -198,7 +199,7 @@ func (c *Cluster) processReady() error {
 				c.Installs[n.ID]++
 				c.Tracef("node %d: installed snapshot %d", n.ID, out.SnapshotInstalled)
 			}
-			for _, m := range out.Messages {
+			for _, m := range msgs {
 				if m.GetType() != raftpb.MsgSnap {
 					c.send(m, nil)
 					continue

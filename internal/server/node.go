@@ -245,6 +245,7 @@ func (s *standalone) run(ctx context.Context) error {
 		if s.sync {
 			s.m.walSync.Observe(time.Since(start).Seconds())
 		}
+		s.m.groupSize.Observe(float64(len(group)))
 		for i := range group {
 			s.m.observeResult(results[i])
 			s.m.commitLatency.Observe(time.Since(group[i].start).Seconds())

@@ -46,19 +46,26 @@ row (2026-11-02, Apple M4 Max, macOS 27.0.1, Go 1.27.3).
 
 ## Active issues
 
-None open.
+- M10 in progress.
+  - Measured so far (bench/results/):
+    - storage microbenchmarks on macOS and on a Linux GitHub runner;
+    - a baseline cluster matrix (`bench/cluster.sh`).
+  - Findings to act on:
+    1. Group-commit convoy: 8 closed-loop clients averaged 3.9 commands per
+       fsync instead of 8.
+    2. The leader persists before replicating, so a commit costs two serial
+       fsyncs. Fix in progress: the leader sends before persisting
+       (replica.Ready takes a send callback).
+  - The Linux batch=1 synced result (6.8 ms/op, slower than batch=10) looks
+    anomalous; a second workflow run was triggered to check it.
 
 ## Next steps
 
-Start M10: a benchmark harness (`mlog-bench` or scripts around `mlogctl
-load`) and docs/benchmarks.md:
-- standalone vs 1/3/5-node raft;
-- fsync always vs never;
-- batch size sweep;
-- tail latency;
-- recovery time and snapshot install time;
-- storage growth and Pebble write amplification;
-- replay throughput;
-- publisher throughput vs batch size.
-Then a final code review, fresh-clone check, README rewrite and résumé
-bullets.
+1. Finish the baseline matrix. Then run `go test -race ./...` on the
+   leader-send-first change, re-run `bench/cluster.sh` into
+   bench/results/leader-parallel, and compare 3-node latency and throughput.
+2. Decide on a group-commit linger based on the `mlog_commit_group_size`
+   histogram.
+3. Run bench/failover.sh, bench/recovery.sh and bench/publisher.sh.
+4. Write docs/benchmarks.md with every parameter and the raw results.
+5. Final review, fresh-clone check, README rewrite, résumé bullets.
