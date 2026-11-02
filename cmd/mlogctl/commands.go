@@ -35,8 +35,12 @@ func cmdStatus(ctx context.Context, e *env, args []string) error {
 		if note == "" && st.Applied < st.Commit {
 			note = fmt.Sprintf("applying, %d behind commit", st.Commit-st.Applied)
 		}
-		fmt.Fprintf(w, "%s\t%d\t%s\t%d\t%d\t%d\t%d\t%d\t%d..%d\t%d\t%s\t%s\n", ep, st.ID, st.Role, st.Term, st.Leader,
-			st.Commit, st.Applied, st.LastOffset, st.FirstIndex, st.LastIndex, st.Snapshot, st.Fsync, note)
+		raftLog := fmt.Sprintf("%d..%d", st.FirstIndex, st.LastIndex)
+		if st.FirstIndex > st.LastIndex {
+			raftLog = "empty"
+		}
+		fmt.Fprintf(w, "%s\t%d\t%s\t%d\t%d\t%d\t%d\t%d\t%s\t%d\t%s\t%s\n", ep, st.ID, st.Role, st.Term, st.Leader,
+			st.Commit, st.Applied, st.LastOffset, raftLog, st.Snapshot, st.Fsync, note)
 		if st.Role == "leader" {
 			leader = &st
 		}

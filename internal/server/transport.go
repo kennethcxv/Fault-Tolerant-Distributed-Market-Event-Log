@@ -49,6 +49,7 @@ type transport struct {
 	id          uint64
 	cluster     string
 	hc          *http.Client
+	snapClient  *http.Client // no overall timeout: snapshots can be large
 	log         *slog.Logger
 	peers       map[uint64]*peerSender
 	unreachable func(id uint64)
@@ -64,8 +65,9 @@ type peerSender struct {
 func newTransport(id uint64, peers map[uint64]string, log *slog.Logger, f *faults, unreachable func(uint64)) *transport {
 	t := &transport{
 		id: id, cluster: clusterID(peers), log: log, faults: f, unreachable: unreachable,
-		hc:    &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{MaxIdleConnsPerHost: 4}},
-		peers: map[uint64]*peerSender{},
+		hc:         &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{MaxIdleConnsPerHost: 4}},
+		snapClient: &http.Client{},
+		peers:      map[uint64]*peerSender{},
 	}
 	for pid, url := range peers {
 		if pid != id {
@@ -154,6 +156,55 @@ func (t *transport) post(ctx context.Context, p *peerSender, body []byte) error 
 		return fmt.Errorf("peer %d answered HTTP %d", p.id, resp.StatusCode)
 	}
 	return nil
+}
+
+// sendSnapshot streams a prepared MsgSnap and the state machine to its peer
+// and reports the outcome; raft keeps the follower in snapshot state until
+// it hears back. The stream is one request: the delimited message, then the
+// state machine stream (storage.StateSnapshot.WriteTo).
+func (t *transport) sendSnapshot(ctx context.Context, m *raftpb.Message, ss interface {
+	io.WriterTo
+	Close() error
+}, done func(ok bool)) {
+	defer ss.Close()
+	p := t.peers[m.GetTo()]
+	if p == nil || t.faults.outbound(p.id) < 0 {
+		done(false)
+		return
+	}
+	pr, pw := io.Pipe()
+	go func() {
+		_, err := protodelim.MarshalTo(pw, m)
+		if err == nil {
+			_, err = ss.WriteTo(pw)
+		}
+		pw.CloseWithError(err)
+	}()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.url+"/raft/snapshot", pr)
+	if err != nil {
+		pr.CloseWithError(err)
+		done(false)
+		return
+	}
+	req.Header.Set(clusterHeader, t.cluster)
+	req.Header.Set("X-Mlog-From", fmt.Sprint(t.id))
+	start := time.Now()
+	resp, err := t.snapClient.Do(req)
+	if err == nil {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNoContent {
+			err = fmt.Errorf("peer answered HTTP %d", resp.StatusCode)
+		}
+	}
+	pr.CloseWithError(err)
+	if err != nil {
+		t.log.Warn("snapshot send failed", "peer", p.id, "index", m.GetSnapshot().GetMetadata().GetIndex(), "err", err)
+		done(false)
+		return
+	}
+	t.log.Info("snapshot sent", "peer", p.id, "index", m.GetSnapshot().GetMetadata().GetIndex(), "duration", time.Since(start))
+	done(true)
 }
 
 // decodeMessages parses a peer request body.

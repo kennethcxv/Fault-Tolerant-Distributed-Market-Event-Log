@@ -92,3 +92,27 @@ func TestTruncatedWALOnFollowerIsDetected(t *testing.T) {
 	}
 	tc.converged(81)
 }
+
+// A follower that was down while the leader compacted its log can only catch
+// up through a snapshot streamed over HTTP.
+func TestRestartedFollowerCatchesUpViaSnapshot(t *testing.T) {
+	tc := newTestClusterWith(t, 3, func(c *Config) { c.SnapshotEntries, c.CompactKeep = 20, 5 })
+	lead := tc.leader()
+	appendN(t, tc.client(), 2, 10)
+	tc.converged(20)
+	victim := lead%3 + 1
+	tc.stop(victim)
+	appendN(t, tc.client(), 4, 40)
+
+	leader := tc.nodes[tc.leader()]
+	first, _ := leader.raft.rep.LogBounds()
+	if first < 30 {
+		t.Fatalf("setup: leader log still starts at %d; it should have compacted", first)
+	}
+	tc.start(victim, nil)
+	// Producers 1 and 2 resent sequences 1-10, which dedup drops: 20 + 140.
+	tc.converged(160)
+	if got := tc.nodes[victim].raft.rep.SnapshotIndex(); got == 0 {
+		t.Fatal("follower caught up without a snapshot")
+	}
+}

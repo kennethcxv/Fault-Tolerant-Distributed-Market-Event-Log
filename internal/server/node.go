@@ -35,6 +35,9 @@ type Config struct {
 	// Peers maps every voter's id to its base URL (raft mode). All nodes must
 	// be started with the same map.
 	Peers map[uint64]string
+	// SnapshotEntries and CompactKeep control log compaction (replica.Config).
+	SnapshotEntries uint64
+	CompactKeep     uint64
 	// TickInterval is one Raft tick; elections time out after 10-20 ticks
 	// and leaders heartbeat every tick.
 	TickInterval time.Duration
@@ -110,7 +113,7 @@ func Start(cfg Config) (*Node, error) {
 			peers = append(peers, id)
 		}
 		rep, err := replica.Open(replica.Config{ID: cfg.ID, Peers: peers, ElectionTick: 10, HeartbeatTick: 1,
-			Sync: cfg.Fsync, Logger: log}, st, f)
+			Sync: cfg.Fsync, SnapshotEntries: cfg.SnapshotEntries, CompactKeep: cfg.CompactKeep, Logger: log}, st, f)
 		if err != nil {
 			st.Close()
 			return nil, err

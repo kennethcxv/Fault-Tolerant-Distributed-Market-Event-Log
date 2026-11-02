@@ -31,6 +31,8 @@ type metrics struct {
 	apply         prometheus.Histogram
 	peerLag       *prometheus.GaugeVec
 	failed        prometheus.Gauge
+	snapshotsSent *prometheus.CounterVec
+	snapshots     *prometheus.CounterVec
 
 	lastLeader uint64
 }
@@ -64,8 +66,12 @@ func newMetrics(f *fsm.FSM, st *storage.Store) *metrics {
 	m.peerLag = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "mlog_replication_lag_entries",
 		Help: "Leader only: leader last index minus the peer's match index."}, []string{"peer"})
 	m.failed = g("mlog_node_failed", "1 once the node stopped serving after a storage error or corruption.")
+	m.snapshotsSent = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "mlog_snapshots_sent_total",
+		Help: "Snapshot streams sent to followers, by success."}, []string{"ok"})
+	m.snapshots = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "mlog_snapshots_total",
+		Help: "Snapshots taken locally (created) or received from the leader (installed)."}, []string{"kind"})
 	m.reg.MustRegister(m.term, m.isLeader, m.commitIndex, m.leaderChanges, m.elections, m.proposals, m.results,
-		m.events, m.commitLatency, m.walSync, m.persist, m.apply, m.peerLag, m.failed,
+		m.events, m.commitLatency, m.walSync, m.persist, m.apply, m.peerLag, m.failed, m.snapshotsSent, m.snapshots,
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "mlog_applied_index", Help: "State machine applied index."},
 			func() float64 { return float64(f.Applied()) }),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "mlog_last_offset", Help: "Last event offset in the local log."},
@@ -86,6 +92,12 @@ func (m *metrics) observeReady(out *replica.Output) {
 	}
 	if out.Commit > 0 {
 		m.commitIndex.Set(float64(out.Commit))
+	}
+	if out.SnapshotCreated > 0 {
+		m.snapshots.WithLabelValues("created").Inc()
+	}
+	if out.SnapshotInstalled > 0 {
+		m.snapshots.WithLabelValues("installed").Inc()
 	}
 }
 

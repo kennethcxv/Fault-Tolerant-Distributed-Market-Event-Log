@@ -32,7 +32,7 @@ type raftEngine struct {
 	proposals chan *raftProposal
 	reads     chan chan error
 	inbound   chan []*raftpb.Message
-	reports   chan uint64
+	reports   chan peerReport
 	statusReq chan chan api.Status
 	stopped   chan struct{}
 
@@ -42,6 +42,14 @@ type raftEngine struct {
 	nextID      uint64
 	waiters     map[uint64]waiter
 	readWaiters map[uint64]chan error
+}
+
+// peerReport tells the run loop that a peer was unreachable or that a
+// snapshot send finished.
+type peerReport struct {
+	peer     uint64
+	snapshot bool
+	ok       bool
 }
 
 type raftProposal struct {
@@ -67,7 +75,7 @@ func newRaftEngine(id uint64, rep *replica.Replica, peers map[uint64]string, tic
 		proposals:   make(chan *raftProposal, 4096),
 		reads:       make(chan chan error, 1024),
 		inbound:     make(chan []*raftpb.Message, 1024),
-		reports:     make(chan uint64, 1024),
+		reports:     make(chan peerReport, 1024),
 		statusReq:   make(chan chan api.Status),
 		stopped:     make(chan struct{}),
 		nextID:      binary.LittleEndian.Uint64(seed[:]),
@@ -76,7 +84,7 @@ func newRaftEngine(id uint64, rep *replica.Replica, peers map[uint64]string, tic
 	}
 	e.tr = newTransport(id, peers, log, f, func(peer uint64) {
 		select {
-		case e.reports <- peer:
+		case e.reports <- peerReport{peer: peer}:
 		default:
 		}
 	})
@@ -123,24 +131,29 @@ func (e *raftEngine) run(ctx context.Context) (err error) {
 			}
 		case done := <-e.reads:
 			e.readIndex(done)
-		case peer := <-e.reports:
-			e.rep.ReportUnreachable(peer)
+		case r := <-e.reports:
+			if r.snapshot {
+				e.rep.ReportSnapshot(r.peer, r.ok)
+				e.m.snapshotsSent.WithLabelValues(fmt.Sprint(r.ok)).Inc()
+			} else {
+				e.rep.ReportUnreachable(r.peer)
+			}
 		case ch := <-e.statusReq:
 			ch <- e.buildStatus()
 		}
-		if err := e.processReady(); err != nil {
+		if err := e.processReady(ctx); err != nil {
 			return err
 		}
 	}
 }
 
-func (e *raftEngine) processReady() error {
+func (e *raftEngine) processReady(ctx context.Context) error {
 	for e.rep.HasReady() {
 		out, err := e.rep.Ready()
 		if err != nil {
 			return err
 		}
-		e.tr.send(out.Messages)
+		e.sendMessages(ctx, out.Messages)
 		e.m.observeReady(&out)
 		for _, r := range out.Results {
 			e.m.observeResult(r)
@@ -162,6 +175,34 @@ func (e *raftEngine) processReady() error {
 		}
 	}
 	return nil
+}
+
+// sendMessages hands ordinary messages to the per-peer queues and starts a
+// stream for each snapshot. The snapshot is prepared here, on the goroutine
+// that applies entries, so its metadata matches the state being streamed.
+func (e *raftEngine) sendMessages(ctx context.Context, msgs []*raftpb.Message) {
+	plain := msgs[:0:0]
+	for _, m := range msgs {
+		if m.GetType() != raftpb.MsgSnap {
+			plain = append(plain, m)
+			continue
+		}
+		to := m.GetTo()
+		msg, ss, err := e.rep.PrepareSnapshot(m)
+		if err != nil {
+			e.log.Error("cannot prepare snapshot", "peer", to, "err", err)
+			e.rep.ReportSnapshot(to, false)
+			continue
+		}
+		e.log.Info("sending snapshot", "peer", to, "index", ss.Applied)
+		go e.tr.sendSnapshot(ctx, msg, ss, func(ok bool) {
+			select {
+			case e.reports <- peerReport{peer: to, snapshot: true, ok: ok}:
+			case <-ctx.Done():
+			}
+		})
+	}
+	e.tr.send(plain)
 }
 
 // onRoleChange resolves requests that can no longer complete normally. A

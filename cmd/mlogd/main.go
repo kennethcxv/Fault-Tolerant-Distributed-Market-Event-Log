@@ -25,6 +25,8 @@ func main() {
 		peers      = flag.String("peers", "", "every voter as id=url, comma-separated, identical on all nodes "+
 			"(e.g. 1=http://127.0.0.1:7001,2=http://127.0.0.1:7002,3=http://127.0.0.1:7003)")
 		tick     = flag.Duration("tick", 100*time.Millisecond, "raft tick; election timeout is 10-20 ticks")
+		snapN    = flag.Uint64("snapshot-entries", 10_000, "snapshot and compact the raft log every N applied entries (0 = never)")
+		keep     = flag.Uint64("snapshot-keep", 5_000, "raft entries kept behind each snapshot for lagging followers")
 		timeout  = flag.Duration("request-timeout", 5*time.Second, "how long a write waits to be applied")
 		logLevel = flag.String("log-level", "info", "debug | info | warn | error")
 	)
@@ -52,6 +54,7 @@ func main() {
 	n, err := server.Start(server.Config{
 		ID: *id, Listen: *listen, DataDir: *data, Fsync: *fsync == "always", Standalone: *standalone,
 		Peers: peerMap, TickInterval: *tick, RequestTimeout: *timeout, Logger: log,
+		SnapshotEntries: *snapN, CompactKeep: *keep,
 	})
 	if err != nil {
 		log.Error("start failed", "err", err)

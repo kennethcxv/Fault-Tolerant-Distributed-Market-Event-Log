@@ -19,15 +19,20 @@ import (
 )
 
 type testCluster struct {
-	t     *testing.T
-	peers map[uint64]string
-	dirs  map[uint64]string
-	nodes map[uint64]*Node
+	t      *testing.T
+	mutate func(*Config)
+	peers  map[uint64]string
+	dirs   map[uint64]string
+	nodes  map[uint64]*Node
 }
 
 func newTestCluster(t *testing.T, size int) *testCluster {
+	return newTestClusterWith(t, size, nil)
+}
+
+func newTestClusterWith(t *testing.T, size int, mutate func(*Config)) *testCluster {
 	t.Helper()
-	tc := &testCluster{t: t, peers: map[uint64]string{}, dirs: map[uint64]string{}, nodes: map[uint64]*Node{}}
+	tc := &testCluster{t: t, mutate: mutate, peers: map[uint64]string{}, dirs: map[uint64]string{}, nodes: map[uint64]*Node{}}
 	lns := map[uint64]net.Listener{}
 	for id := uint64(1); id <= uint64(size); id++ {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -62,8 +67,12 @@ func (tc *testCluster) start(id uint64, ln net.Listener) {
 			tc.t.Fatal(err)
 		}
 	}
-	n, err := Start(Config{ID: id, DataDir: tc.dirs[id], Fsync: true, Peers: tc.peers, Listener: ln,
-		TickInterval: 10 * time.Millisecond, RequestTimeout: 2 * time.Second, Logger: quiet})
+	cfg := Config{ID: id, DataDir: tc.dirs[id], Fsync: true, Peers: tc.peers, Listener: ln,
+		TickInterval: 10 * time.Millisecond, RequestTimeout: 2 * time.Second, Logger: quiet}
+	if tc.mutate != nil {
+		tc.mutate(&cfg)
+	}
+	n, err := Start(cfg)
 	if err != nil {
 		tc.t.Fatal(err)
 	}

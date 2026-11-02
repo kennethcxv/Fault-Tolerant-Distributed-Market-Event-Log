@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.etcd.io/raft/v3/raftpb"
+	"google.golang.org/protobuf/encoding/protodelim"
 
 	"github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/api"
 	"github.com/kennethcxv/Fault-Tolerant-Distributed-Market-Event-Log/internal/event"
@@ -39,6 +42,7 @@ func (n *Node) routes() *http.ServeMux {
 	mux.HandleFunc("PUT /debug/fault", n.handleSetFault)
 	if n.raft != nil {
 		mux.HandleFunc("POST /raft/message", n.handleRaftMessage)
+		mux.HandleFunc("POST /raft/snapshot", n.handleRaftSnapshot)
 	}
 	return mux
 }
@@ -63,6 +67,42 @@ func (n *Node) handleRaftMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	select {
 	case n.raft.inbound <- msgs:
+		w.WriteHeader(http.StatusNoContent)
+	case <-n.raft.stopped:
+		http.Error(w, "node stopped", http.StatusServiceUnavailable)
+	case <-r.Context().Done():
+	}
+}
+
+// handleRaftSnapshot receives a MsgSnap and the state machine stream. The
+// stream must be durable on disk before raft sees the message, because once
+// raft accepts the snapshot it expects to be able to install it after a crash.
+func (n *Node) handleRaftSnapshot(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get(clusterHeader) != n.raft.tr.cluster {
+		http.Error(w, "cluster id mismatch: nodes were started with different --peers", http.StatusConflict)
+		return
+	}
+	from, _ := strconv.ParseUint(r.Header.Get("X-Mlog-From"), 10, 64)
+	if n.flts.dropInbound(from) {
+		http.Error(w, "dropped by fault injection", http.StatusServiceUnavailable)
+		return
+	}
+	br := bufio.NewReaderSize(r.Body, 1<<20)
+	m := &raftpb.Message{}
+	if err := protodelim.UnmarshalFrom(br, m); err != nil || m.GetType() != raftpb.MsgSnap {
+		http.Error(w, "expected a MsgSnap", http.StatusBadRequest)
+		return
+	}
+	index := m.GetSnapshot().GetMetadata().GetIndex()
+	start := time.Now()
+	if err := n.store.ReceiveSnapshot(br, index); err != nil {
+		n.log.Warn("rejected snapshot", "from", from, "index", index, "err", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	n.log.Info("received snapshot", "from", from, "index", index, "duration", time.Since(start))
+	select {
+	case n.raft.inbound <- []*raftpb.Message{m}:
 		w.WriteHeader(http.StatusNoContent)
 	case <-n.raft.stopped:
 		http.Error(w, "node stopped", http.StatusServiceUnavailable)
