@@ -12,10 +12,12 @@ milestone.
   - `internal/fsm`: producer dedup, dense offsets, checkpoints, crash-atomicity test.
   - `internal/server` (standalone mode), `internal/client`, `cmd/mlogd`, `cmd/mlogctl`.
   - CI: gofmt, vet, staticcheck, `go test -race`.
+- M3 Versioned events and deterministic replay: `internal/orderbook` (schema v1,
+  book, generator), `internal/replay` (engine, checkpoint files),
+  `fixtures/orderbook-v1`, `mlogctl replay`.
 
 ## Remaining acceptance criteria
 
-- [ ] M3 Order-book fixture (schema v1), deterministic replay engine, golden hash
 - [ ] M4 Raft replication (`internal/replica`, peer transport, 3- and 5-node clusters)
 - [ ] M5 Restart recovery; crash tests on the crash-simulating filesystem
 - [ ] M6 Snapshots, raft-log compaction, snapshot transfer and install
@@ -36,6 +38,6 @@ None open.
 
 ## Next steps
 
-Start M3: `internal/orderbook` (schema v1 event codecs, deterministic book,
-canonical state hash, snapshot/restore) and `internal/replay` (engine over a
-store or HTTP source, checkpoint files).
+Start M4: `internal/replica` (RawNode + MemoryStorage + Pebble persistence,
+Ready loop), Raft persistence in `internal/storage`, HTTP peer transport, and
+the Raft engine in `internal/server` with leader redirects and ReadIndex.

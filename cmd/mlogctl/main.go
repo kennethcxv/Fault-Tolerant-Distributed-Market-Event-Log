@@ -23,6 +23,7 @@ var commands = map[string]command{
 	"read":       {"read events: read [--from N] [--limit N] [--linearizable]", cmdRead},
 	"producer":   {"show a producer's last committed sequence: producer ID", cmdProducer},
 	"checkpoint": {"get or set a consumer checkpoint: checkpoint NAME [OFFSET]", cmdCheckpoint},
+	"replay":     {"rebuild the order book from the log and print its state hash", cmdReplay},
 }
 
 func main() {

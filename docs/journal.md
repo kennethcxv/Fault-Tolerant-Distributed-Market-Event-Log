@@ -71,3 +71,44 @@ reading Pebble's `mkdirAllAndSyncParents`, the simpler fix was to remove our
 after power loss; this isn't specific to the simulator.
 
 Not yet measured: throughput and latency. Nothing about performance is claimed.
+
+## 2026-11-02 — Milestone 3: versioned events and deterministic replay
+
+Done:
+
+- `internal/orderbook`: schema v1 (add, cancel, execute, replace; ITCH-style)
+  and a price-time priority book. Invalid messages are counted, not fatal, and
+  the counts are part of the hash. An unknown schema version stops replay
+  rather than being skipped. The canonical binary encoding serves as both the
+  snapshot format and the hash input.
+- A seeded feed generator and a golden fixture
+  (`fixtures/orderbook-v1/events.bin`, 5,000 records, expected SHA-256 in
+  `expected.txt`). The test checks that the generator still produces the same
+  bytes and that replaying them still produces the same state.
+- `internal/replay`: strict offset order. Repeated deliveries are skipped;
+  gaps, corrupt records and unsupported schemas stop replay at the last good
+  offset. Checkpoint files are written atomically and verified on load.
+- `mlogctl replay`.
+- Tests:
+  - snapshot at any point plus the rest of the feed equals a full replay;
+  - interrupted replay resumes to the same hash;
+  - overlapping deliveries;
+  - missing record;
+  - corrupt record;
+  - damaged checkpoint file;
+  - fuzzing of snapshot decoding (5.6M inputs, no accepted non-canonical
+    snapshot).
+
+Bugs found:
+
+- The first fixture showed crossed books: bid 9996 above ask 9995 on
+  instrument 0. The generator moved each instrument's mid price while old
+  orders kept resting, so bids ended up above asks. No real venue feed looks
+  like that, so the generator now keeps bids strictly below a fixed mid and
+  asks strictly above, and a test asserts that every book in the generated
+  feed is uncrossed.
+- `Engine.Run` looped forever when the source re-sent only events it had
+  already applied (it took "non-empty batch" to mean "progress"). An
+  at-least-once source does exactly that at the end of the log. Run now
+  treats a batch with nothing at or past the next offset as caught up. Found
+  by `TestRepeatedDeliveryIsIgnored`, which hung.
